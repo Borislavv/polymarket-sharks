@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-watchtower}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-watchtower}
+      POSTGRES_DB: ${POSTGRES_DB:-watchtower}
+    ports:
+      - "5547:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  watchtower:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-watchtower}:${POSTGRES_PASSWORD:-watchtower}@postgres:5432/${POSTGRES_DB:-watchtower}?sslmode=disable
+      METRICS_ADDR: ":9095"
+    ports:
+      - "9096:9095"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

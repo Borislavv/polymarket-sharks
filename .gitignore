@@ -1,0 +1,24 @@
+# --- secrets / local env ---
+.env
+.env.*
+!.env.example
+
+# --- editor / IDE / OS ---
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Go build / test artifacts ---
+/bin/
+/dist/
+/tmp/
+/coverage.out
+/coverage.html
+*.test
+*.out
+
+# --- container/state ---
+/pgdata/
