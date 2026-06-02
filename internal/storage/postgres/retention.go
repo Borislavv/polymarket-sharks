@@ -17,17 +17,13 @@ type ClosedPositionDedupResult struct {
 	MaxScannedID int64
 }
 
-func (s *Store) EstimateTableRows(ctx context.Context, table string) (int64, error) {
+func (s *Store) CountRetainedTableRows(ctx context.Context, table string) (int64, error) {
 	if !isRetainedTable(table) {
 		return 0, fmt.Errorf("retention: unsupported table %q", table)
 	}
-	const q = `
-		SELECT GREATEST(COALESCE(c.reltuples, 0), 0)::bigint
-		FROM pg_class c
-		JOIN pg_namespace n ON n.oid = c.relnamespace
-		WHERE n.nspname = 'public' AND c.relname = $1`
+	q := fmt.Sprintf("SELECT count(*)::bigint FROM %s", table)
 	var rows int64
-	if err := s.Pool.QueryRow(ctx, q, table).Scan(&rows); err != nil {
+	if err := s.Pool.QueryRow(ctx, q).Scan(&rows); err != nil {
 		return 0, err
 	}
 	return rows, nil

@@ -140,18 +140,18 @@ func (w *Worker) runCap(ctx context.Context, table string, maxRows int64, delete
 	if maxRows <= 0 {
 		return 0
 	}
-	estimateCtx, cancel := context.WithTimeout(ctx, w.PerTableTimeout)
-	estimate, err := w.Store.EstimateTableRows(estimateCtx, table)
+	countCtx, cancel := context.WithTimeout(ctx, w.PerTableTimeout)
+	rows, err := w.Store.CountRetainedTableRows(countCtx, table)
 	cancel()
 	if err != nil {
-		w.recordError(table, "estimate", err)
+		w.recordError(table, "count", err)
 		return 0
 	}
-	metrics.SetGauge(metricName("retention_estimated_rows", table, "rowcap"), estimate)
-	if estimate <= maxRows {
+	metrics.SetGauge(metricName("retention_current_rows", table, "rowcap"), rows)
+	if rows <= maxRows {
 		return 0
 	}
-	overage := estimate - maxRows
+	overage := rows - maxRows
 	limit := w.BatchSize
 	if overage < int64(limit) {
 		limit = int(overage)
