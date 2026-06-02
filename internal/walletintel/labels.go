@@ -15,13 +15,28 @@ import (
 // ScoreVersion is bumped on any change that alters score outputs.
 // Persisted alongside every wallet_scores row.
 //
-// v5.0.0 introduces the high_volume_profitable_shark path, replacing
-// the ROI-based historical_shark gate. Hard gates now require total
-// realized PnL >= 50 k, avg trade >= 5 k, volume >= 500 k, profitable
-// exit rate >= 60%, and profit factor >= 1.25. ROI is kept as a
-// diagnostic metric only — it is never a hard promotion gate.
-// Multi-outcome direction (OUTCOME_BUY / OUTCOME_SELL) is also new.
-const ScoreVersion = "v5.0.0"
+// v6.0.0 pivots strategy qualification to high-frequency + profitability
+// windows (7d/30d) and removes win-rate as a promotion gate. Profitability
+// is measured as realized_pnl / entry_notional over the window.
+//
+// v6.1.0 makes lucky-spike cap-aware for Polymarket Data API history limits
+// and streams candidates from the global trades feed.
+//
+// v6.2.0 makes lucky-spike profitability Polymarket-native: promotion profit
+// uses /positions cashPnl divided by initial stake for markets traded in the
+// weekly/monthly window, not reconstructed trade cycles.
+//
+// v6.3.0 paginates /positions and prefers initialValue for entry notional.
+//
+// v6.4.0 fetches lucky-spike weekly wallet trade history from /activity with
+// end-cursor continuation past the verified historical offset cap.
+//
+// v6.5.0 removes the Polymarket position/cycle sample from lucky-spike hard
+// promotion gates; the strategy gates on frequency, coverage, and profit.
+//
+// v6.6.0 uses Polymarket profile P&L delta as the lucky-spike profit numerator
+// when available, falling back to positions cashPnl only if profile P&L fails.
+const ScoreVersion = "v6.6.0"
 
 // Direction labels — canonical names used across the pipeline.
 type Direction string

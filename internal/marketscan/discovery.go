@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/Borislavv/polymarket-sharks/internal/metrics"
@@ -45,28 +46,34 @@ func (w *DiscoveryWorker) Run(ctx context.Context) error {
 
 func (w *DiscoveryWorker) runOnce(ctx context.Context) {
 	start := time.Now()
-	if w.Log != nil {
-		w.Log.Info("discovery cycle started", "tags", w.TargetCategories)
-	}
-	var fetched, eventsUp, marketsUp, tokensUp, errs int
-	for _, tag := range w.TargetCategories {
-		active := true
-		closed := false
-		evts, raw, err := w.Gamma.ListEvents(ctx, gamma.ListEventsParams{
-			Tag:    tag,
-			Active: &active,
-			Closed: &closed,
-			Limit:  w.PageLimit,
-		})
-		if err != nil {
-			errs++
-			if w.Log != nil {
-				w.Log.Warn("discovery list events failed", "tag", tag, "err", err)
+	normalize := func(in []string) []string {
+		out := make([]string, 0, len(in))
+		for _, s := range in {
+			x := strings.ToLower(strings.TrimSpace(s))
+			if x == "" {
+				continue
 			}
-			metrics.Inc("discovery_errors_total")
-			continue
+			if x == "*" || x == "all" {
+				return nil
+			}
+			out = append(out, x)
 		}
-		_ = raw // raw is preserved per-event below; aggregate raw not needed
+		return out
+	}
+	targets := normalize(w.TargetCategories)
+	mode := "all"
+	if len(targets) > 0 {
+		mode = "tags"
+	}
+	if w.Log != nil {
+		w.Log.Info("discovery cycle started", "mode", mode, "tags", targets)
+	}
+
+	var fetched, eventsUp, marketsUp, tokensUp, errs int
+	active := true
+	closed := false
+
+	processEvents := func(evts []gamma.Event) {
 		fetched += len(evts)
 		for _, e := range evts {
 			rawEvent, _ := json.Marshal(e)
@@ -134,6 +141,47 @@ func (w *DiscoveryWorker) runOnce(ctx context.Context) {
 					}
 				}
 			}
+		}
+	}
+
+	fetchPaged := func(tag string) {
+		const maxPages = 100
+		for page := 0; page < maxPages; page++ {
+			offset := page * w.PageLimit
+			evts, raw, err := w.Gamma.ListEvents(ctx, gamma.ListEventsParams{
+				Tag:    tag,
+				Active: &active,
+				Closed: &closed,
+				Limit:  w.PageLimit,
+				Offset: offset,
+			})
+			if err != nil {
+				errs++
+				if w.Log != nil {
+					w.Log.Warn("discovery list events failed", "tag", tag, "offset", offset, "err", err)
+				}
+				metrics.Inc("discovery_errors_total")
+				return
+			}
+			_ = raw
+			if len(evts) == 0 {
+				return
+			}
+			processEvents(evts)
+			if len(evts) < w.PageLimit {
+				return
+			}
+		}
+		if w.Log != nil {
+			w.Log.Warn("discovery pagination cap reached", "tag", tag, "max_pages", 100)
+		}
+	}
+
+	if len(targets) == 0 {
+		fetchPaged("")
+	} else {
+		for _, tag := range targets {
+			fetchPaged(tag)
 		}
 	}
 	if w.Log != nil {

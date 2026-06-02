@@ -337,6 +337,59 @@ func (r *Runner) AssembleFacts(ctx context.Context, walletID, proxy string) (Wal
 		f.HistoricalOpenPositionCount = sample.OpenUnresolvedCount
 	}
 
+	// --- Rolling 7d / 30d activity + profitability windows ---
+	type windowOut struct {
+		trades        *int
+		coverage      *time.Duration
+		avgInterval   *time.Duration
+		cycles        *int
+		pnl           *float64
+		entryNotional *float64
+		profitPct     *float64
+		profitKnown   *bool
+	}
+	fillWindow := func(lookback time.Duration, out windowOut) {
+		start := now.Add(-lookback)
+		if ts, err := r.Store.GetTradeWindowStats(ctx, walletID, start); err == nil {
+			*out.trades = ts.Trades
+			if ts.FirstTrade != nil && ts.LastTrade != nil && ts.LastTrade.After(*ts.FirstTrade) {
+				*out.coverage = ts.LastTrade.Sub(*ts.FirstTrade)
+			}
+			if ts.Trades > 0 {
+				*out.avgInterval = time.Duration(float64(lookback) / float64(ts.Trades))
+			}
+		}
+		if rs, err := r.Store.GetRealizedWindowStats(ctx, walletID, start); err == nil {
+			*out.cycles = rs.Cycles
+			*out.pnl = rs.TotalPnL
+			*out.entryNotional = rs.TotalEntryStake
+			if rs.TotalEntryStake > 0 {
+				*out.profitPct = rs.TotalPnL / rs.TotalEntryStake
+				*out.profitKnown = true
+			}
+		}
+	}
+	fillWindow(7*24*time.Hour, windowOut{
+		trades:        &f.WeeklyTradeCount,
+		coverage:      &f.WeeklyCoverage,
+		avgInterval:   &f.WeeklyAvgTradeInterval,
+		cycles:        &f.WeeklyRealizedCycles,
+		pnl:           &f.WeeklyRealizedPnL,
+		entryNotional: &f.WeeklyEntryNotional,
+		profitPct:     &f.WeeklyProfitPct,
+		profitKnown:   &f.WeeklyProfitPctKnown,
+	})
+	fillWindow(30*24*time.Hour, windowOut{
+		trades:        &f.MonthlyTradeCount,
+		coverage:      &f.MonthlyCoverage,
+		avgInterval:   &f.MonthlyAvgTradeInterval,
+		cycles:        &f.MonthlyRealizedCycles,
+		pnl:           &f.MonthlyRealizedPnL,
+		entryNotional: &f.MonthlyEntryNotional,
+		profitPct:     &f.MonthlyProfitPct,
+		profitKnown:   &f.MonthlyProfitPctKnown,
+	})
+
 	return f, nil
 }
 

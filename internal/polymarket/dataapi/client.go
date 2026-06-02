@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/Borislavv/polymarket-sharks/internal/polymarket"
 )
@@ -40,16 +41,19 @@ func DefaultPaths() Paths {
 }
 
 type Client struct {
-	HTTP  *polymarket.HTTPClient
-	Paths Paths
+	HTTP           *polymarket.HTTPClient
+	Paths          Paths
+	UserPnLBaseURL string
 }
 
+const DefaultUserPnLBaseURL = "https://user-pnl-api.polymarket.com"
+
 func New(http *polymarket.HTTPClient) *Client {
-	return &Client{HTTP: http, Paths: DefaultPaths()}
+	return &Client{HTTP: http, Paths: DefaultPaths(), UserPnLBaseURL: DefaultUserPnLBaseURL}
 }
 
 func NewWithPaths(http *polymarket.HTTPClient, p Paths) *Client {
-	return &Client{HTTP: http, Paths: p}
+	return &Client{HTTP: http, Paths: p, UserPnLBaseURL: DefaultUserPnLBaseURL}
 }
 
 // Holder is the inner holder record from the /holders endpoint.
@@ -178,6 +182,7 @@ type ClosedPosition struct {
 	Title              string
 	Size               float64
 	AvgPrice           float64
+	InitialValue       float64
 	CurrentValue       float64
 	TotalBought        float64
 	RealizedPnL        float64
@@ -244,6 +249,7 @@ func (c *Client) GetClosedPositionsPaginated(ctx context.Context, user string, l
 			Title:              p.Title,
 			Size:               size,
 			AvgPrice:           p.AvgPrice.Float64(),
+			InitialValue:       p.InitialValue.Float64(),
 			CurrentValue:       p.CurrentValue.Float64(),
 			TotalBought:        p.TotalBought.Float64(),
 			RealizedPnL:        realized,
@@ -443,6 +449,81 @@ func (c *Client) GetActivity(ctx context.Context, user string, limit int) ([]Act
 	return out, raw, nil
 }
 
+// GetActivityPaginated fetches one explicit /activity page. Use this for
+// high-throughput wallet history: Polymarket caps historical offsets, so
+// callers should page offsets only up to the cap and then continue with
+// end=<oldest_seen_ts-1>.
+func (c *Client) GetActivityPaginated(ctx context.Context, user, activityType string, limit, offset int, start, end int64, sortBy, sortDirection string) ([]Activity, []byte, error) {
+	q := url.Values{}
+	q.Set("user", user)
+	if activityType != "" {
+		q.Set("type", activityType)
+	}
+	if limit > 0 {
+		q.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	if offset > 0 {
+		q.Set("offset", fmt.Sprintf("%d", offset))
+	}
+	if start > 0 {
+		q.Set("start", fmt.Sprintf("%d", start))
+	}
+	if end > 0 {
+		q.Set("end", fmt.Sprintf("%d", end))
+	}
+	if sortBy != "" {
+		q.Set("sortBy", sortBy)
+	}
+	if sortDirection != "" {
+		q.Set("sortDirection", sortDirection)
+	}
+	u := c.HTTP.Base + c.Paths.Activity + "?" + q.Encode()
+	raw, err := c.HTTP.GET(ctx, u)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out []Activity
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, raw, fmt.Errorf("dataapi: parse activity: %w", err)
+	}
+	return out, raw, nil
+}
+
+// PnLPoint is one profile/UI-like P&L point from user-pnl-api.polymarket.com.
+type PnLPoint struct {
+	T polymarket.FlexInt   `json:"t"`
+	P polymarket.FlexFloat `json:"p"`
+}
+
+// GetUserPnLSeries fetches Polymarket's public profile P&L series. Supported
+// intervals observed live include 1d, 1w, 1m, all/max; fidelity is usually 1h.
+func (c *Client) GetUserPnLSeries(ctx context.Context, user, interval, fidelity string) ([]PnLPoint, []byte, error) {
+	base := strings.TrimRight(c.UserPnLBaseURL, "/")
+	if base == "" {
+		base = DefaultUserPnLBaseURL
+	}
+	if interval == "" {
+		interval = "1w"
+	}
+	if fidelity == "" {
+		fidelity = "1h"
+	}
+	q := url.Values{}
+	q.Set("user_address", user)
+	q.Set("interval", interval)
+	q.Set("fidelity", fidelity)
+	u := base + "/user-pnl?" + q.Encode()
+	raw, err := c.HTTP.GET(ctx, u)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out []PnLPoint
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, raw, fmt.Errorf("dataapi: parse user pnl: %w", err)
+	}
+	return out, raw, nil
+}
+
 // UserSummary is the projection assembled from /traded + summed /positions.
 type UserSummary struct {
 	TotalTrades        int     // count of trades observed via /trades (best-effort)
@@ -456,8 +537,8 @@ type UserSummary struct {
 	// /positions (no limit). cashPnl = realized + unrealized P&L per position,
 	// which is what the Polymarket UI displays as "all-time P&L". This is the
 	// closest public approximation to the wallet's global profitability.
-	TotalCashPnL        float64
-	TotalCashPnLKnown   bool
+	TotalCashPnL            float64
+	TotalCashPnLKnown       bool
 	TotalCashPnLSampleCount int // number of positions the sum is based on
 }
 

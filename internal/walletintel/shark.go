@@ -2,6 +2,7 @@ package walletintel
 
 import (
 	"math"
+	"time"
 )
 
 // ScoreShark evaluates a wallet against the v5 high_volume_profitable_shark
@@ -12,12 +13,12 @@ import (
 //   - total realized PnL                 >= VolumeMinTotalPnL    (default 50_000)
 //   - avg realized trade notional        >= VolumeMinAvgTrade     (default 5_000)
 //   - total realized volume              >= VolumeMinTotalVolume  (default 500_000)
-//   - profitable exit rate               >= VolumeMinExitRate     (default 0.60)
-//   - profit factor                      >= VolumeMinProfitFactor (default 1.25;
-//     API-only path uses exit_rate+0.10 proxy — never silently waived)
+//   - high-frequency activity            (avg interval <= 2m in 7d or 30d window)
+//   - realized profitability ratio       (realized_pnl / entry_notional > 30%
+//     in 7d or 30d window)
 //
 // ROI is stored in the feature_snapshot as a diagnostic metric but is never a
-// hard gate. Win-rate is carried for information but is NOT a hard gate.
+// hard gate.
 func ScoreShark(f WalletFacts, p SharkParams) ScoreResult {
 	snap := FeatureSnapshot{}
 	var reasons []string
@@ -40,14 +41,16 @@ func ScoreShark(f WalletFacts, p SharkParams) ScoreResult {
 	if minVolume <= 0 {
 		minVolume = 500_000
 	}
-	minExitRate := p.VolumeMinExitRate
-	if minExitRate <= 0 {
-		minExitRate = 0.60
+	maxAvgInterval := p.MaxAvgTradeInterval
+	if maxAvgInterval <= 0 {
+		maxAvgInterval = 2 * time.Minute
 	}
-	minPF := p.VolumeMinProfitFactor
-	if minPF <= 0 {
-		minPF = 1.25
+	minWindowProfitPct := p.MinWindowProfitPct
+	if minWindowProfitPct <= 0 {
+		minWindowProfitPct = 0.30
 	}
+	minTradesWeek := int((7 * 24 * time.Hour) / maxAvgInterval)
+	minTradesMonth := int((30 * 24 * time.Hour) / maxAvgInterval)
 
 	// ---- Gate 0: data-quality bookkeeping (informational, NOT a hard gate) ----
 	if !f.ClosedPositionsComplete && f.ClosedPositionsCountHist > 0 {
@@ -137,17 +140,12 @@ func ScoreShark(f WalletFacts, p SharkParams) ScoreResult {
 	pnlOK := totalPnL >= minPnL
 	avgTradeOK := avgTrade >= minAvgTrade
 	volumeOK := totalVolume >= minVolume
-	exitRateOK := exitRate >= minExitRate
-
-	// profit_factor gate: use actual PF when available (realized path), or a
-	// stricter exit_rate proxy when PF is unavailable (API-only path).
-	var pfOK bool
-	if profitFactorAvail {
-		pfOK = profitFactor >= minPF
-	} else {
-		// API path: exit_rate >= minExitRate+0.10 guards against unquantified risk.
-		pfOK = exitRate >= minExitRate+0.10
-	}
+	weeklyFreqOK := f.WeeklyTradeCount >= minTradesWeek && f.WeeklyAvgTradeInterval > 0 && f.WeeklyAvgTradeInterval <= maxAvgInterval
+	monthlyFreqOK := f.MonthlyTradeCount >= minTradesMonth && f.MonthlyAvgTradeInterval > 0 && f.MonthlyAvgTradeInterval <= maxAvgInterval
+	freqOK := weeklyFreqOK || monthlyFreqOK
+	weeklyProfitOK := f.WeeklyProfitPctKnown && f.WeeklyProfitPct > minWindowProfitPct
+	monthlyProfitOK := f.MonthlyProfitPctKnown && f.MonthlyProfitPct > minWindowProfitPct
+	windowProfitOK := weeklyProfitOK || monthlyProfitOK
 
 	if cyclesOK {
 		reasons = appendUnique(reasons, "SUFFICIENT_CYCLES_SAMPLE")
@@ -169,23 +167,15 @@ func ScoreShark(f WalletFacts, p SharkParams) ScoreResult {
 	} else {
 		reasons = appendUnique(reasons, "VOLUME_TOO_LOW")
 	}
-	if exitRateOK {
-		reasons = appendUnique(reasons, "EXIT_RATE_ABOVE_60PCT")
+	if freqOK {
+		reasons = appendUnique(reasons, "HIGH_FREQUENCY_ACTIVITY")
 	} else {
-		reasons = appendUnique(reasons, "EXIT_RATE_TOO_LOW")
+		reasons = appendUnique(reasons, "LOW_FREQUENCY_ACTIVITY")
 	}
-	if profitFactorAvail {
-		if pfOK {
-			reasons = appendUnique(reasons, "PROFIT_FACTOR_ABOVE_1_25")
-		} else {
-			reasons = appendUnique(reasons, "PROFIT_FACTOR_TOO_LOW")
-		}
+	if windowProfitOK {
+		reasons = appendUnique(reasons, "WINDOW_PROFIT_PCT_ABOVE_30PCT")
 	} else {
-		if pfOK {
-			reasons = appendUnique(reasons, "API_EXIT_RATE_PROXY_PASS")
-		} else {
-			reasons = appendUnique(reasons, "API_EXIT_RATE_PROXY_FAIL")
-		}
+		reasons = appendUnique(reasons, "WINDOW_PROFIT_PCT_TOO_LOW")
 	}
 
 	// ROI and win-rate are always recorded — diagnostic only.
@@ -205,7 +195,7 @@ func ScoreShark(f WalletFacts, p SharkParams) ScoreResult {
 		}
 	}
 
-	hardGatesPass := cyclesOK && pnlOK && avgTradeOK && volumeOK && exitRateOK && pfOK
+	hardGatesPass := cyclesOK && pnlOK && avgTradeOK && volumeOK && freqOK && windowProfitOK
 	if hardGatesPass {
 		reasons = appendUnique(reasons, "SHARK_HISTORICAL_EDGE")
 	}
@@ -222,10 +212,23 @@ func ScoreShark(f WalletFacts, p SharkParams) ScoreResult {
 	}
 
 	// ---- composite score ----
-	score := hvpSharkScore(cyclesCount, totalPnL, avgTrade, exitRate, profitFactor)
+	bestWindowProfit := 0.0
+	if f.WeeklyProfitPctKnown {
+		bestWindowProfit = f.WeeklyProfitPct
+	}
+	if f.MonthlyProfitPctKnown && f.MonthlyProfitPct > bestWindowProfit {
+		bestWindowProfit = f.MonthlyProfitPct
+	}
+	freqRatio := 0.0
+	if weeklyFreqOK {
+		freqRatio = 1.0
+	} else if monthlyFreqOK {
+		freqRatio = 1.0
+	}
+	score := hvpSharkScore(cyclesCount, totalPnL, avgTrade, totalVolume, bestWindowProfit, freqRatio)
 
 	// ---- confidence ----
-	conf := hvpSharkConfidence(cyclesCount, exitRate, profitFactor, scoringBasis)
+	conf := hvpSharkConfidence(cyclesCount, bestWindowProfit, freqRatio, scoringBasis)
 	if !hardGatesPass {
 		if conf > 0.5 {
 			conf = 0.5
@@ -302,6 +305,24 @@ func ScoreShark(f WalletFacts, p SharkParams) ScoreResult {
 	// Diagnostic fields (NOT gates)
 	snap["roi"] = diagROI
 	snap["win_rate"] = diagWinRate
+	snap["weekly_trade_count"] = f.WeeklyTradeCount
+	snap["weekly_avg_trade_interval_minutes"] = f.WeeklyAvgTradeInterval.Minutes()
+	snap["weekly_profit_pct"] = f.WeeklyProfitPct
+	snap["weekly_profit_pct_known"] = f.WeeklyProfitPctKnown
+	snap["monthly_trade_count"] = f.MonthlyTradeCount
+	snap["monthly_avg_trade_interval_minutes"] = f.MonthlyAvgTradeInterval.Minutes()
+	snap["monthly_profit_pct"] = f.MonthlyProfitPct
+	snap["monthly_profit_pct_known"] = f.MonthlyProfitPctKnown
+	snap["high_frequency_gate_pass"] = freqOK
+	snap["weekly_frequency_gate_pass"] = weeklyFreqOK
+	snap["monthly_frequency_gate_pass"] = monthlyFreqOK
+	snap["window_profit_pct_gate_pass"] = windowProfitOK
+	snap["weekly_window_profit_gate_pass"] = weeklyProfitOK
+	snap["monthly_window_profit_gate_pass"] = monthlyProfitOK
+	snap["max_avg_trade_interval_minutes"] = maxAvgInterval.Minutes()
+	snap["min_window_profit_pct"] = minWindowProfitPct
+	snap["min_trades_per_week"] = minTradesWeek
+	snap["min_trades_per_month"] = minTradesMonth
 
 	// Realized trading evidence
 	snap["realized_cycles_count"] = f.RealizedCyclesCount
@@ -366,19 +387,17 @@ func ScoreShark(f WalletFacts, p SharkParams) ScoreResult {
 
 // hvpSharkScore maps the high-volume-profitable-shark evidence to 0..100.
 // Monotonic in each dimension; saturates at conservative ceilings.
-func hvpSharkScore(cycles int, totalPnL, avgTrade, exitRate, profitFactor float64) int {
+func hvpSharkScore(cycles int, totalPnL, avgTrade, totalVolume, windowProfitPct, frequencyRatio float64) int {
 	if cycles == 0 {
 		return 0
 	}
 	score := 0.0
 	// Cycles component (0..20): log scale; 10 → ~10, 50 → ~16, 200+ → 20.
 	score += clampFloat(math.Log10(float64(maxInt(1, cycles)))*14, 0, 20)
-	// Exit rate component (0..25): 60% → 0, 75% → 15, 90%+ → 25.
-	score += clampFloat((exitRate-0.60)*100, 0, 25)
-	// Profit factor component (0..25): 1.25 → 0, 2.0 → 15, 3.0+ → 25.
-	if profitFactor > 0 {
-		score += clampFloat((math.Log10(profitFactor))*30, 0, 25)
-	}
+	// Frequency component (0..20): pass gives full points.
+	score += clampFloat(frequencyRatio*20, 0, 20)
+	// Profit percentage component (0..20): >30% starts scoring.
+	score += clampFloat((windowProfitPct-0.30)*100, 0, 20)
 	// Realized PnL component (0..15): $50k → 0, $200k → 10, $1M+ → 15.
 	if totalPnL > 0 {
 		score += clampFloat((math.Log10(totalPnL)-4.7)*12, 0, 15)
@@ -386,6 +405,10 @@ func hvpSharkScore(cycles int, totalPnL, avgTrade, exitRate, profitFactor float6
 	// Avg trade component (0..15): $5k → 0, $20k → 8, $100k+ → 15.
 	if avgTrade > 0 {
 		score += clampFloat((math.Log10(avgTrade)-3.7)*10, 0, 15)
+	}
+	// Volume component (0..10): $500k → 0, $2M → 8, $10M+ → 10.
+	if totalVolume > 0 {
+		score += clampFloat((math.Log10(totalVolume)-5.7)*8, 0, 10)
 	}
 	if score > 100 {
 		score = 100
@@ -396,7 +419,7 @@ func hvpSharkScore(cycles int, totalPnL, avgTrade, exitRate, profitFactor float6
 	return int(math.Round(score))
 }
 
-func hvpSharkConfidence(cycles int, exitRate, profitFactor float64, basis string) float64 {
+func hvpSharkConfidence(cycles int, windowProfitPct, frequencyRatio float64, basis string) float64 {
 	if cycles == 0 {
 		return 0
 	}
@@ -417,13 +440,11 @@ func hvpSharkConfidence(cycles int, exitRate, profitFactor float64, basis string
 	if basis == "api_closed_positions" {
 		c *= 0.90
 	}
-	// exit rate boosts confidence above 0.75
-	if exitRate >= 0.75 {
-		c = math.Min(c+0.05, 0.95)
+	if frequencyRatio >= 1 {
+		c = math.Min(c+0.05, 0.97)
 	}
-	// strong profit factor also boosts
-	if profitFactor >= 2.0 {
-		c = math.Min(c+0.03, 0.97)
+	if windowProfitPct >= 0.30 {
+		c = math.Min(c+0.05, 0.95)
 	}
 	return c
 }

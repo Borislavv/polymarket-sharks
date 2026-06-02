@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func fakeEnv(m map[string]string) func(string) string {
@@ -55,8 +56,20 @@ func TestLoad_DefaultsLoaded(t *testing.T) {
 	if c.ClusterMinWallets != 2 {
 		t.Fatalf("default ClusterMinWallets expected 2, got %d", c.ClusterMinWallets)
 	}
-	if !contains(c.TargetCategories, "politics") {
-		t.Fatalf("expected politics category in defaults, got %v", c.TargetCategories)
+	if !contains(c.TargetCategories, "all") {
+		t.Fatalf("expected 'all' categories default, got %v", c.TargetCategories)
+	}
+	if c.LuckySpikeEnabled {
+		t.Fatalf("expected LUCKY_SPIKE_ENABLED default false")
+	}
+	if c.MLBLateGameEnabled {
+		t.Fatalf("expected MLB_LATE_GAME_ENABLED default false")
+	}
+	if c.MLBStatsAPIBaseURL != "https://statsapi.mlb.com" {
+		t.Fatalf("default MLBStatsAPIBaseURL unexpected: %q", c.MLBStatsAPIBaseURL)
+	}
+	if c.RetentionEnabled {
+		t.Fatalf("expected RETENTION_ENABLED default false")
 	}
 }
 
@@ -115,6 +128,78 @@ func TestLoad_AlertingDisabled(t *testing.T) {
 	}
 	if c.AlertingEnabled {
 		t.Fatalf("ALERTING_ENABLED=false must disable")
+	}
+}
+
+func TestLoad_MLBLateGame_CustomValues(t *testing.T) {
+	env := baseEnv()
+	env["MLB_LATE_GAME_ENABLED"] = "true"
+	env["MLB_LATE_GAME_INTERVAL"] = "15s"
+	env["MLB_LATE_GAME_MIN_INNING"] = "10"
+	env["MLB_LATE_GAME_MIN_AWAY_DEFICIT"] = "3"
+	env["MLB_LATE_GAME_MARKET_LIMIT"] = "250"
+	env["MLB_STATS_API_BASE_URL"] = "https://example.test"
+
+	c, err := LoadFromEnv(fakeEnv(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.MLBLateGameEnabled {
+		t.Fatal("MLB_LATE_GAME_ENABLED=true should enable")
+	}
+	if c.MLBLateGameInterval != 15*time.Second {
+		t.Fatalf("MLB_LATE_GAME_INTERVAL: want 15s, got %v", c.MLBLateGameInterval)
+	}
+	if c.MLBLateGameMinInning != 10 {
+		t.Fatalf("MLB_LATE_GAME_MIN_INNING: want 10, got %d", c.MLBLateGameMinInning)
+	}
+	if c.MLBLateGameMinAwayDeficit != 3 {
+		t.Fatalf("MLB_LATE_GAME_MIN_AWAY_DEFICIT: want 3, got %d", c.MLBLateGameMinAwayDeficit)
+	}
+	if c.MLBLateGameMarketLimit != 250 {
+		t.Fatalf("MLB_LATE_GAME_MARKET_LIMIT: want 250, got %d", c.MLBLateGameMarketLimit)
+	}
+	if c.MLBStatsAPIBaseURL != "https://example.test" {
+		t.Fatalf("MLB_STATS_API_BASE_URL: got %q", c.MLBStatsAPIBaseURL)
+	}
+}
+
+func TestLoad_Retention_CustomValues(t *testing.T) {
+	env := baseEnv()
+	env["RETENTION_ENABLED"] = "true"
+	env["RETENTION_INTERVAL"] = "2m"
+	env["RETENTION_PER_TABLE_TIMEOUT"] = "20s"
+	env["RETENTION_BATCH_SIZE"] = "1234"
+	env["RETENTION_WALLET_CLOSED_POSITIONS_MAX_ROWS"] = "200000"
+	env["RETENTION_MARKET_PRICE_SAMPLES_MAX_ROWS"] = "300000"
+	env["RETENTION_HOLDER_SNAPSHOTS_MAX_ROWS"] = "400000"
+	env["RETENTION_CANDIDATE_EVIDENCE_MAX_ROWS"] = "500000"
+	env["RETENTION_WALLET_SCORES_MAX_ROWS"] = "600000"
+
+	c, err := LoadFromEnv(fakeEnv(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.RetentionEnabled {
+		t.Fatal("RETENTION_ENABLED=true should enable")
+	}
+	if c.RetentionInterval != 2*time.Minute {
+		t.Fatalf("RetentionInterval: want 2m, got %v", c.RetentionInterval)
+	}
+	if c.RetentionPerTableTimeout != 20*time.Second {
+		t.Fatalf("RetentionPerTableTimeout: want 20s, got %v", c.RetentionPerTableTimeout)
+	}
+	if c.RetentionBatchSize != 1234 {
+		t.Fatalf("RetentionBatchSize: want 1234, got %d", c.RetentionBatchSize)
+	}
+	if c.RetentionWalletClosedPositionsMaxRows != 200000 {
+		t.Fatalf("RetentionWalletClosedPositionsMaxRows: got %d", c.RetentionWalletClosedPositionsMaxRows)
+	}
+	if c.RetentionMarketPriceSamplesMaxRows != 300000 ||
+		c.RetentionHolderSnapshotsMaxRows != 400000 ||
+		c.RetentionCandidateEvidenceMaxRows != 500000 ||
+		c.RetentionWalletScoresMaxRows != 600000 {
+		t.Fatalf("retention caps not loaded: %+v", c)
 	}
 }
 
@@ -262,6 +347,61 @@ func TestLoad_ClusterProfitGate_Defaults(t *testing.T) {
 	}
 	if c.ClusterMinAvgOdds != 2.0 {
 		t.Fatalf("ClusterMinAvgOdds default 2.0, got %g", c.ClusterMinAvgOdds)
+	}
+}
+
+func TestLoad_LuckySpikeDefaults(t *testing.T) {
+	c, err := LoadFromEnv(fakeEnv(baseEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.LuckySpikeInterval != 30*time.Minute {
+		t.Fatalf("LuckySpikeInterval default 30m, got %v", c.LuckySpikeInterval)
+	}
+	if c.LuckySpikeMaxMarkets != 0 {
+		t.Fatalf("LuckySpikeMaxMarkets default 0 (all), got %d", c.LuckySpikeMaxMarkets)
+	}
+	if c.LuckySpikeMaxAvgTradeInterval != 2*time.Minute {
+		t.Fatalf("LuckySpikeMaxAvgTradeInterval default 2m, got %v", c.LuckySpikeMaxAvgTradeInterval)
+	}
+	if c.LuckySpikeCandidateTradePageSize != 500 {
+		t.Fatalf("LuckySpikeCandidateTradePageSize default 500, got %d", c.LuckySpikeCandidateTradePageSize)
+	}
+	if c.LuckySpikeCandidateTradeMaxPages != 120 {
+		t.Fatalf("LuckySpikeCandidateTradeMaxPages default 120, got %d", c.LuckySpikeCandidateTradeMaxPages)
+	}
+	if c.LuckySpikeCandidateMinSampleTrades != 6 {
+		t.Fatalf("LuckySpikeCandidateMinSampleTrades default 6, got %d", c.LuckySpikeCandidateMinSampleTrades)
+	}
+	if c.LuckySpikeWalletActivityMaxPages != 90 {
+		t.Fatalf("LuckySpikeWalletActivityMaxPages default 90, got %d", c.LuckySpikeWalletActivityMaxPages)
+	}
+	if c.LuckySpikeMinTradesPerWeek != 5040 {
+		t.Fatalf("LuckySpikeMinTradesPerWeek default 5040, got %d", c.LuckySpikeMinTradesPerWeek)
+	}
+	if c.LuckySpikeMinTradesPerMonth != 21600 {
+		t.Fatalf("LuckySpikeMinTradesPerMonth default 21600, got %d", c.LuckySpikeMinTradesPerMonth)
+	}
+	if c.LuckySpikeMinProfitPct != 0.30 {
+		t.Fatalf("LuckySpikeMinProfitPct default 0.30, got %g", c.LuckySpikeMinProfitPct)
+	}
+	if c.LuckySpikeMinCoverage != 6*24*time.Hour {
+		t.Fatalf("LuckySpikeMinCoverage default 6d, got %v", c.LuckySpikeMinCoverage)
+	}
+	if c.LuckySpikeMinObservedTrades != 1000 {
+		t.Fatalf("LuckySpikeMinObservedTrades default 1000, got %d", c.LuckySpikeMinObservedTrades)
+	}
+	if c.LuckySpikeMinObservedCoverage != 48*time.Hour {
+		t.Fatalf("LuckySpikeMinObservedCoverage default 48h, got %v", c.LuckySpikeMinObservedCoverage)
+	}
+}
+
+func TestLoad_LuckySpikeInvalidProfitPctFails(t *testing.T) {
+	env := baseEnv()
+	env["LUCKY_SPIKE_MIN_PROFIT_PCT"] = "11"
+	_, err := LoadFromEnv(fakeEnv(env))
+	if err == nil || !strings.Contains(err.Error(), "LUCKY_SPIKE_MIN_PROFIT_PCT") {
+		t.Fatalf("expected LUCKY_SPIKE_MIN_PROFIT_PCT validation error, got %v", err)
 	}
 }
 

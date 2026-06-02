@@ -165,8 +165,8 @@ type WalletFacts struct {
 	// Profile all-time P&L (sourced from /positions cashPnl sum — same as
 	// Polymarket UI "all-time P&L"). Populated from GetUserSummary in runner.
 	// When known and strongly negative, this is a hard veto on active promotion.
-	ProfileCashPnL           float64
-	ProfileCashPnLKnown      bool
+	ProfileCashPnL            float64
+	ProfileCashPnLKnown       bool
 	ProfileCashPnLSampleCount int // positions the sum is based on
 
 	// Position universe breadth (from wallet_closed_positions). Used to detect
@@ -186,6 +186,24 @@ type WalletFacts struct {
 	LifetimeLosingCount     int
 	FirstTradeAt            time.Time
 	InsiderStreakClean      bool // true iff LifetimeLosingCount == 0
+
+	// Rolling window performance (used by high-frequency + profitability gates).
+	WeeklyTradeCount        int
+	WeeklyCoverage          time.Duration
+	WeeklyAvgTradeInterval  time.Duration
+	WeeklyRealizedCycles    int
+	WeeklyRealizedPnL       float64
+	WeeklyEntryNotional     float64
+	WeeklyProfitPct         float64
+	WeeklyProfitPctKnown    bool
+	MonthlyTradeCount       int
+	MonthlyCoverage         time.Duration
+	MonthlyAvgTradeInterval time.Duration
+	MonthlyRealizedCycles   int
+	MonthlyRealizedPnL      float64
+	MonthlyEntryNotional    float64
+	MonthlyProfitPct        float64
+	MonthlyProfitPctKnown   bool
 }
 
 // NewBetContext describes the specific trade that triggered insider scoring.
@@ -247,6 +265,10 @@ type SharkParams struct {
 	VolumeMinExitRate     float64 // profitable exit rate; default 0.60
 	VolumeMinProfitFactor float64 // profit factor; default 1.25; API-only path uses exit_rate proxy instead
 	VolumeMinCycles       int     // min realized cycles for sample validity; default 10
+
+	// High-frequency + profitability gates.
+	MaxAvgTradeInterval time.Duration // default 2m
+	MinWindowProfitPct  float64       // default 0.30
 }
 
 // InsiderParams mirrors the relevant config knobs.
@@ -261,4 +283,8 @@ type InsiderParams struct {
 	MinOdds               float64 // default 3.0 (price <= 1/3)
 	MaxLifetimeForCapture int     // default 10 — wallets above this are not initial insider candidates
 	HighImpactCategories  []string
+
+	// High-frequency + profitability gates.
+	MaxAvgTradeInterval time.Duration // default 2m
+	MinWindowProfitPct  float64       // default 0.30
 }

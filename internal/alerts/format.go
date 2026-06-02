@@ -450,6 +450,78 @@ func FormatInsiderLikeDiscovered(a DiscoveryAlert, links LinkBuilder) string {
 	return b.String()
 }
 
+// FormatLuckySpikeCandidate renders an admin-only alert for wallets that
+// match the lucky-spike strategy (high frequency + elevated profit percentage).
+func FormatLuckySpikeCandidate(a LuckySpikeAlert, links LinkBuilder) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "*LUCKY SPIKE CANDIDATE* · *ADMIN*\n\n")
+
+	traderLink := links.TraderLink(displayName(a.Pseudonym, a.WalletShort), a.ProfileSlug, a.WalletFull)
+	if traderLink == "" {
+		fmt.Fprintf(&b, "Trader: %s\n", telegram.EscapeMD(displayName(a.Pseudonym, a.WalletShort)))
+	} else {
+		fmt.Fprintf(&b, "Trader: %s\n", traderLink)
+	}
+	fmt.Fprintf(&b, "Class: %s\n", telegram.EscapeMD("insider-like candidate (weekly luck spike)"))
+	fmt.Fprintf(&b, "Score: %s/100 · confidence %s\n",
+		telegram.EscapeMD(fmt.Sprintf("%d", a.Score)),
+		telegram.EscapeMD(fmt.Sprintf("%.2f", a.Confidence)))
+
+	if a.ReasonHumanized != "" {
+		fmt.Fprintf(&b, "\nWhy selected:\n· %s\n", telegram.EscapeMD(a.ReasonHumanized))
+	}
+
+	fmt.Fprintf(&b, "\nWeekly stats:\n")
+	fmt.Fprintf(&b, "· trades: %s across %s markets\n",
+		telegram.EscapeMD(fmt.Sprintf("%d", a.WeeklyTradeCount)),
+		telegram.EscapeMD(fmt.Sprintf("%d", a.WeeklyDistinctMarkets)))
+	fmt.Fprintf(&b, "· profitable exits: %s/%s\n",
+		telegram.EscapeMD(fmt.Sprintf("%d", a.WeeklyProfitableCycles)),
+		telegram.EscapeMD(fmt.Sprintf("%d", a.WeeklyRealizedCycles)),
+	)
+	fmt.Fprintf(&b, "· weekly profit %%: %s\n",
+		telegram.EscapeMD(pctOrNA(a.WeeklyProfitPct)))
+	fmt.Fprintf(&b, "· monthly profit %%: %s\n",
+		telegram.EscapeMD(pctOrNA(a.MonthlyProfitPct)))
+	fmt.Fprintf(&b, "· avg trade interval: %s min\n",
+		telegram.EscapeMD(fmt.Sprintf("%.2f", a.AvgTradeIntervalMinutes)))
+	fmt.Fprintf(&b, "· monthly avg interval: %s min\n",
+		telegram.EscapeMD(fmt.Sprintf("%.2f", a.MonthlyAvgTradeIntervalMinutes)))
+	if a.MonthlyTradeCount > 0 || a.MonthlyRealizedCycles > 0 {
+		fmt.Fprintf(&b, "· monthly trades/cycles: %s/%s\n",
+			telegram.EscapeMD(fmt.Sprintf("%d", a.MonthlyTradeCount)),
+			telegram.EscapeMD(fmt.Sprintf("%d", a.MonthlyRealizedCycles)))
+	}
+	fmt.Fprintf(&b, "· activity coverage: %s h\n",
+		telegram.EscapeMD(fmt.Sprintf("%.1f", a.WeeklyCoverageHours)))
+	if a.AvgWeeklyTradeNotionalUSD > 0 {
+		fmt.Fprintf(&b, "· avg trade notional: %s\n",
+			telegram.EscapeMD(usd(a.AvgWeeklyTradeNotionalUSD)))
+	}
+	if a.DataQuality != "" {
+		fmt.Fprintf(&b, "· data quality: %s\n",
+			telegram.EscapeMD(a.DataQuality))
+	}
+	if a.TradeHistoryPartialHint != "" {
+		fmt.Fprintf(&b, "· partial-history hint: %s\n",
+			telegram.EscapeMD(strings.ReplaceAll(strings.ToLower(a.TradeHistoryPartialHint), "_", " ")))
+	}
+
+	fmt.Fprintf(&b, "\nNote: %s\n",
+		telegram.EscapeMD("suspicious informed-flow candidate, not a legal insider claim"))
+	fmt.Fprintf(&b, "\nWhat happens next:\n· admin review recommended\n· wallet can be manually promoted to watchlist if confirmed\n\n")
+
+	dashLink := ""
+	if a.DashboardURL != "" {
+		dashLink = mdLinkEscaped("Dashboard", a.DashboardURL)
+	}
+	emitLinks(&b, JoinLinks(
+		links.TraderLink("Trader", a.ProfileSlug, a.WalletFull),
+		dashLink,
+	))
+	return b.String()
+}
+
 // FormatWalletDemoted renders the admin-only demotion notice.
 func FormatWalletDemoted(a DiscoveryAlert, links LinkBuilder) string {
 	var b strings.Builder
@@ -763,6 +835,56 @@ func FormatNewsAlert(a NewsAlert, links LinkBuilder) string {
 	return b.String()
 }
 
+// FormatMLBLateGameAlert renders the late-game baseball timing alert.
+func FormatMLBLateGameAlert(a MLBLateGameAlert, links LinkBuilder) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "*MLB LATE\\-GAME SETUP* · *HIGH*\n\n")
+	fmt.Fprintf(&b, "Game: %s at %s\n",
+		telegram.EscapeMD(a.AwayTeam),
+		telegram.EscapeMD(a.HomeTeam))
+	fmt.Fprintf(&b, "Score: %s %d · %s %d \\(%s trailing by %d\\)\n",
+		telegram.EscapeMD(a.AwayTeam), a.AwayScore,
+		telegram.EscapeMD(a.HomeTeam), a.HomeScore,
+		telegram.EscapeMD(a.AwayTeam), a.Deficit)
+	state := a.InningState
+	if state == "" {
+		state = fmt.Sprintf("%s %d", a.InningHalf, a.Inning)
+	}
+	fmt.Fprintf(&b, "State: %s · status %s\n",
+		telegram.EscapeMD(state),
+		telegram.EscapeMD(a.Status))
+	if !a.GameTime.IsZero() {
+		fmt.Fprintf(&b, "Game time: %s\n", telegram.EscapeMD(a.GameTime.UTC().Format("2006-01-02 15:04 UTC")))
+	}
+	fmt.Fprintf(&b, "\nWhy: away team is batting in top 9\\+/extras while down by %d runs; failed inning can sharply reprice comeback markets\\.\n", a.Deficit)
+	if len(a.MatchedMarkets) > 0 {
+		fmt.Fprintf(&b, "\nMatched Polymarket markets:\n")
+		for i, m := range a.MatchedMarkets {
+			if i >= 4 {
+				fmt.Fprintf(&b, "… and %s more\n", telegram.EscapeMD(fmt.Sprintf("%d", len(a.MatchedMarkets)-i)))
+				break
+			}
+			title := m.Title
+			if title == "" {
+				title = m.Slug
+			}
+			marketLink := links.MarketLink(truncTitle(title, 54), m.Slug)
+			if marketLink == "" {
+				marketLink = telegram.EscapeMD(truncTitle(title, 54))
+			}
+			fmt.Fprintf(&b, "· %s\n", marketLink)
+		}
+	}
+	if len(a.ReasonCodes) > 0 {
+		fmt.Fprintf(&b, "Reasons: %s\n", telegram.EscapeMD(strings.Join(a.ReasonCodes, " · ")))
+	}
+	emitLinks(&b, JoinLinks(
+		links.EventLink("Event", a.EventSlug),
+		links.MarketLink("Market", a.MarketSlug),
+	))
+	return b.String()
+}
+
 func displayName(pseudonym, wallet string) string {
 	if pseudonym != "" {
 		return pseudonym
@@ -797,29 +919,38 @@ func HumanizeReasons(codes []string, maxN int) string {
 		maxN = 4
 	}
 	humanized := map[string]string{
-		"HIGH_SAMPLE_SIZE":            "deep history",
-		"POSITIVE_REALIZED_PNL":       "positive realized PnL",
-		"STRONG_PAYOFF_PROFILE":       "strong payoff profile",
-		"POSITIVE_CLV_PROXY":          "positive post-trade drift",
-		"CATEGORY_FOCUSED":            "category focus",
-		"LARGE_BET_SELECTIVE":         "selective large bets",
-		"RECENT_ACTIVITY":             "recent activity",
-		"TOP_HOLDER":                  "top holder",
-		"NEW_WALLET":                  "new wallet",
-		"LOW_LIFETIME_HISTORY":        "low lifetime history",
-		"FIRST_LARGE_BET":             "first large bet",
-		"LARGE_NOTIONAL":              "unusually large bet",
-		"LOW_PROBABILITY_ENTRY":       "low-probability entry",
-		"HIGH_PAYOFF":                 "high payoff if right",
-		"TOP_HOLDER_POSITION":         "top holder",
-		"SUDDEN_HOLDER_CONCENTRATION": "sudden concentration",
-		"NEAR_CATALYST":               "near catalyst",
-		"HIGH_IMPACT_MARKET":          "high-impact market",
-		"SUSPICIOUS_STREAK":           "suspicious streak",
-		"MULTI_WALLET_ALIGNED":        "watched wallets aligned",
-		"INSIDER_LIKE_PARTICIPANT":    "insider-like participant",
-		"SHARK_PARTICIPANT":           "shark participant",
-		"CLUSTER_EVIDENCE":            "cluster alignment",
+		"HIGH_SAMPLE_SIZE":               "deep history",
+		"POSITIVE_REALIZED_PNL":          "positive realized PnL",
+		"STRONG_PAYOFF_PROFILE":          "strong payoff profile",
+		"POSITIVE_CLV_PROXY":             "positive post-trade drift",
+		"CATEGORY_FOCUSED":               "category focus",
+		"LARGE_BET_SELECTIVE":            "selective large bets",
+		"RECENT_ACTIVITY":                "recent activity",
+		"TOP_HOLDER":                     "top holder",
+		"NEW_WALLET":                     "new wallet",
+		"LOW_LIFETIME_HISTORY":           "low lifetime history",
+		"FIRST_LARGE_BET":                "first large bet",
+		"LARGE_NOTIONAL":                 "unusually large bet",
+		"LOW_PROBABILITY_ENTRY":          "low-probability entry",
+		"HIGH_PAYOFF":                    "high payoff if right",
+		"TOP_HOLDER_POSITION":            "top holder",
+		"SUDDEN_HOLDER_CONCENTRATION":    "sudden concentration",
+		"NEAR_CATALYST":                  "near catalyst",
+		"HIGH_IMPACT_MARKET":             "high-impact market",
+		"SUSPICIOUS_STREAK":              "suspicious streak",
+		"MULTI_WALLET_ALIGNED":           "watched wallets aligned",
+		"INSIDER_LIKE_PARTICIPANT":       "insider-like participant",
+		"SHARK_PARTICIPANT":              "shark participant",
+		"CLUSTER_EVIDENCE":               "cluster alignment",
+		"HIGH_FREQUENCY_ACTIVITY":        "high trading frequency",
+		"LOW_FREQUENCY_ACTIVITY":         "low trading frequency",
+		"WEEKLY_HIGH_FREQUENCY":          "very high weekly frequency",
+		"WEEKLY_SUSTAINED_ACTIVITY":      "sustained week-long activity",
+		"WEEKLY_REALIZED_SAMPLE_OK":      "sufficient realized sample",
+		"WEEKLY_PROFIT_PCT_ABOVE_30PCT":  "weekly profit above 30%",
+		"MONTHLY_PROFIT_PCT_ABOVE_30PCT": "monthly profit above 30%",
+		"WINDOW_PROFIT_PCT_ABOVE_30PCT":  "window profit above 30%",
+		"SUSPECTED_LUCK_SPIKE_PATTERN":   "suspicious weekly luck spike",
 	}
 	var picked []string
 	for _, c := range codes {

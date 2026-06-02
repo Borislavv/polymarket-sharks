@@ -32,23 +32,36 @@ ALTER TABLE wallet_closed_positions
 DROP INDEX IF EXISTS uq_wcp_wallet_position_observed;
 
 -- New unique key matches the application's actual identity for a closed
--- position. On a clean DB this creates instantly; on production it will
--- fail until dedup runs, which is fine — the upsert query in
--- InsertClosedPositions does not require the constraint to function.
+-- position. Migrations are executed on every service start in this project, so
+-- never attempt a heavyweight unique-index build on a large production table
+-- during boot. Clean/small DBs still get the invariant immediately; large DBs
+-- are deduplicated by the retention worker/operator cleanup first, then the
+-- unique index can be created manually/concurrently.
 DO $migration_0012$
+DECLARE
+    row_estimate bigint;
 BEGIN
-    BEGIN
-        CREATE UNIQUE INDEX uq_wcp_wallet_position
-            ON wallet_closed_positions(wallet_id, condition_id, outcome);
-    EXCEPTION
-        WHEN unique_violation THEN
-            RAISE NOTICE 'wallet_closed_positions has duplicate keys; '
-                'unique index uq_wcp_wallet_position NOT created. '
-                'Run docs/cleanup-closed-positions.sql then create the '
-                'index manually.';
-        WHEN duplicate_table THEN
-            -- index already exists from a previous migrate run
-            NULL;
-    END;
-END
+    IF to_regclass('public.uq_wcp_wallet_position') IS NOT NULL THEN
+        RETURN;
+    END IF;
+
+    SELECT GREATEST(COALESCE(reltuples, 0), 0)::bigint
+      INTO row_estimate
+      FROM pg_class
+     WHERE oid = 'wallet_closed_positions'::regclass;
+
+    IF row_estimate <= 1000000 THEN
+        BEGIN
+            CREATE UNIQUE INDEX uq_wcp_wallet_position
+                ON wallet_closed_positions(wallet_id, condition_id, outcome);
+        EXCEPTION
+            WHEN unique_violation THEN
+                RAISE NOTICE 'wallet_closed_positions has duplicate keys; unique index uq_wcp_wallet_position NOT created. Run retention/operator cleanup then create the index manually.';
+            WHEN duplicate_table THEN
+                NULL;
+        END;
+    ELSE
+        RAISE NOTICE 'wallet_closed_positions row estimate % is too high for startup unique-index build; retention/operator cleanup must deduplicate first.', row_estimate;
+    END IF;
+END;
 $migration_0012$;

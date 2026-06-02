@@ -18,6 +18,8 @@ func defaultSharkParams() SharkParams {
 		VolumeMinExitRate:     0.60,
 		VolumeMinProfitFactor: 1.25,
 		VolumeMinCycles:       10,
+		MaxAvgTradeInterval:   2 * time.Minute,
+		MinWindowProfitPct:    0.30,
 	}
 }
 
@@ -41,6 +43,14 @@ func promotableSharkFacts() WalletFacts {
 		RealizedProfitFactor:          1.80,        // > 1.25 ✓
 		ClosedPositionsComplete:       true,
 		TradesBackfillComplete:        true,
+		WeeklyTradeCount:              6_000,
+		WeeklyAvgTradeInterval:        100 * time.Second,
+		WeeklyProfitPct:               0.42,
+		WeeklyProfitPctKnown:          true,
+		MonthlyTradeCount:             25_000,
+		MonthlyAvgTradeInterval:       105 * time.Second,
+		MonthlyProfitPct:              0.35,
+		MonthlyProfitPctKnown:         true,
 	}
 }
 
@@ -64,11 +74,11 @@ func TestShark_PromotesWhenAllGatesPass(t *testing.T) {
 	if !contains(r.ReasonCodes, "VOLUME_ABOVE_500K") {
 		t.Fatalf("expected VOLUME_ABOVE_500K: %v", r.ReasonCodes)
 	}
-	if !contains(r.ReasonCodes, "EXIT_RATE_ABOVE_60PCT") {
-		t.Fatalf("expected EXIT_RATE_ABOVE_60PCT: %v", r.ReasonCodes)
+	if !contains(r.ReasonCodes, "HIGH_FREQUENCY_ACTIVITY") {
+		t.Fatalf("expected HIGH_FREQUENCY_ACTIVITY: %v", r.ReasonCodes)
 	}
-	if !contains(r.ReasonCodes, "PROFIT_FACTOR_ABOVE_1_25") {
-		t.Fatalf("expected PROFIT_FACTOR_ABOVE_1_25: %v", r.ReasonCodes)
+	if !contains(r.ReasonCodes, "WINDOW_PROFIT_PCT_ABOVE_30PCT") {
+		t.Fatalf("expected WINDOW_PROFIT_PCT_ABOVE_30PCT: %v", r.ReasonCodes)
 	}
 	if path, _ := r.FeatureSnapshot["promotion_path"].(string); path != "high_volume_profitable_shark" {
 		t.Fatalf("expected promotion_path=high_volume_profitable_shark, got %v", path)
@@ -91,6 +101,14 @@ func TestShark_RealizedTradingSignalPreferredWhenSufficient(t *testing.T) {
 		RealizedTotalPnL:              200_000, // > 50k ✓
 		RealizedProfitFactor:          1.50,    // > 1.25 ✓
 		ClosedPositionsComplete:       true,
+		WeeklyTradeCount:              6_200,
+		WeeklyAvgTradeInterval:        100 * time.Second,
+		WeeklyProfitPct:               0.36,
+		WeeklyProfitPctKnown:          true,
+		MonthlyTradeCount:             25_500,
+		MonthlyAvgTradeInterval:       102 * time.Second,
+		MonthlyProfitPct:              0.34,
+		MonthlyProfitPctKnown:         true,
 	}
 	r := ScoreShark(f, defaultSharkParams())
 	if !r.Promote {
@@ -127,13 +145,14 @@ func TestShark_ROIIsNotAGate(t *testing.T) {
 // TestShark_WinRateIsNotAGate proves win-rate is not a hard gate.
 func TestShark_WinRateIsNotAGate(t *testing.T) {
 	f := promotableSharkFacts()
-	// Drop exit rate to exactly 60% boundary — should still pass
-	f.RealizedProfitableCyclesCount = 24
-	f.RealizedLosingCyclesCount = 16
-	f.RealizedWinRate = 24.0 / 40.0 // 0.60 — meets gate
+	// Drop profitable exit rate sharply — should still pass because frequency
+	// and profit percentage are the gating factors.
+	f.RealizedProfitableCyclesCount = 12
+	f.RealizedLosingCyclesCount = 28
+	f.RealizedWinRate = 12.0 / 40.0 // 0.30
 	r := ScoreShark(f, defaultSharkParams())
 	if !r.Promote {
-		t.Fatalf("exit rate exactly 60%% must promote (>= gate): %v", r.ReasonCodes)
+		t.Fatalf("low exit rate must not block promotion: %v", r.ReasonCodes)
 	}
 }
 
@@ -153,6 +172,14 @@ func TestShark_FinalOutcomeDoesNotOverrideProfitableExit(t *testing.T) {
 		RealizedTotalPnL:              84_000, // > 50k ✓
 		RealizedProfitFactor:          1.50,
 		ClosedPositionsComplete:       true,
+		WeeklyTradeCount:              5_800,
+		WeeklyAvgTradeInterval:        108 * time.Second,
+		WeeklyProfitPct:               0.41,
+		WeeklyProfitPctKnown:          true,
+		MonthlyTradeCount:             24_200,
+		MonthlyAvgTradeInterval:       110 * time.Second,
+		MonthlyProfitPct:              0.33,
+		MonthlyProfitPctKnown:         true,
 	}
 	r := ScoreShark(f, defaultSharkParams())
 	if !r.Promote {
@@ -203,29 +230,31 @@ func TestShark_VolumeTooLowRejected(t *testing.T) {
 	}
 }
 
-func TestShark_ExitRateTooLowRejected(t *testing.T) {
+func TestShark_LowFrequencyRejected(t *testing.T) {
 	f := promotableSharkFacts()
-	f.RealizedProfitableCyclesCount = 23 // 23/40 = 0.575 < 0.60
-	f.RealizedLosingCyclesCount = 17
-	f.RealizedWinRate = 23.0 / 40.0
+	f.WeeklyTradeCount = 600
+	f.WeeklyAvgTradeInterval = 20 * time.Minute
+	f.MonthlyTradeCount = 2_500
+	f.MonthlyAvgTradeInterval = 20 * time.Minute
 	r := ScoreShark(f, defaultSharkParams())
 	if r.Promote {
-		t.Fatalf("expected NOT promoted at exit rate 57.5%%")
+		t.Fatalf("expected NOT promoted at low trading frequency")
 	}
-	if !contains(r.ReasonCodes, "EXIT_RATE_TOO_LOW") {
-		t.Fatalf("expected EXIT_RATE_TOO_LOW: %v", r.ReasonCodes)
+	if !contains(r.ReasonCodes, "LOW_FREQUENCY_ACTIVITY") {
+		t.Fatalf("expected LOW_FREQUENCY_ACTIVITY: %v", r.ReasonCodes)
 	}
 }
 
-func TestShark_ProfitFactorTooLowRejected(t *testing.T) {
+func TestShark_WindowProfitTooLowRejected(t *testing.T) {
 	f := promotableSharkFacts()
-	f.RealizedProfitFactor = 1.10 // < 1.25 gate
+	f.WeeklyProfitPct = 0.25
+	f.MonthlyProfitPct = 0.20
 	r := ScoreShark(f, defaultSharkParams())
 	if r.Promote {
-		t.Fatalf("expected NOT promoted with profit factor 1.10")
+		t.Fatalf("expected NOT promoted with window profit below 30%%")
 	}
-	if !contains(r.ReasonCodes, "PROFIT_FACTOR_TOO_LOW") {
-		t.Fatalf("expected PROFIT_FACTOR_TOO_LOW: %v", r.ReasonCodes)
+	if !contains(r.ReasonCodes, "WINDOW_PROFIT_PCT_TOO_LOW") {
+		t.Fatalf("expected WINDOW_PROFIT_PCT_TOO_LOW: %v", r.ReasonCodes)
 	}
 }
 
@@ -242,8 +271,8 @@ func TestShark_InsufficientCyclesRejected(t *testing.T) {
 }
 
 func TestShark_APIPathPromotes(t *testing.T) {
-	// API closed-position path: profit_factor unavailable, so exit_rate proxy
-	// applies — requires exit_rate >= minExitRate+0.10 = 0.70 (not just 0.60).
+	// API closed-position path can still promote when frequency/profit window
+	// gates pass.
 	now := time.Now()
 	f := WalletFacts{
 		Now:                         now,
@@ -257,19 +286,21 @@ func TestShark_APIPathPromotes(t *testing.T) {
 		HistoricalROI:               0.087,
 		HistoricalPnLKnown:          true,
 		ClosedPositionsComplete:     true,
+		WeeklyTradeCount:            6_000,
+		WeeklyAvgTradeInterval:      110 * time.Second,
+		WeeklyProfitPct:             0.34,
+		WeeklyProfitPctKnown:        true,
+		MonthlyTradeCount:           25_000,
+		MonthlyAvgTradeInterval:     115 * time.Second,
+		MonthlyProfitPct:            0.33,
+		MonthlyProfitPctKnown:       true,
 	}
 	r := ScoreShark(f, defaultSharkParams())
 	if !r.Promote {
-		t.Fatalf("API closed-position path must promote when proxy gate passes: %v", r.ReasonCodes)
+		t.Fatalf("API closed-position path must promote when window gates pass: %v", r.ReasonCodes)
 	}
 	if basis, _ := r.FeatureSnapshot["scoring_basis"].(string); basis != "api_closed_positions" {
 		t.Fatalf("expected api_closed_positions basis, got %v", basis)
-	}
-	if !contains(r.ReasonCodes, "API_EXIT_RATE_PROXY_PASS") {
-		t.Fatalf("expected API_EXIT_RATE_PROXY_PASS: %v", r.ReasonCodes)
-	}
-	if contains(r.ReasonCodes, "PROFIT_FACTOR_ABOVE_1_25") {
-		t.Fatalf("PROFIT_FACTOR_ABOVE_1_25 must not appear on API path (PF unavailable): %v", r.ReasonCodes)
 	}
 	pfAvail, ok := r.FeatureSnapshot["profit_factor_available"].(bool)
 	if !ok || pfAvail {
@@ -280,14 +311,13 @@ func TestShark_APIPathPromotes(t *testing.T) {
 	}
 }
 
-func TestShark_APIPathRequiresStrictExitRateProxy(t *testing.T) {
-	// API path with exit_rate=66% passes the main exit gate (>=60%) but fails
-	// the profit_factor proxy gate (requires >=70%). Must NOT promote.
+func TestShark_APIPathRequiresWindowProfitGate(t *testing.T) {
+	// API path with high activity but low profit percentage must NOT promote.
 	now := time.Now()
 	f := WalletFacts{
 		Now:                         now,
 		ClosedPositionsCountHist:    50,
-		ProfitableClosedPositions:   33, // 66% — above main gate but below 70% proxy
+		ProfitableClosedPositions:   33,
 		LosingClosedPositions:       17,
 		HistoricalTotalBoughtClosed: 750_000,
 		HistoricalRealizedPnL:       65_000,
@@ -295,13 +325,21 @@ func TestShark_APIPathRequiresStrictExitRateProxy(t *testing.T) {
 		HistoricalWinRate:           33.0 / 50.0,
 		HistoricalPnLKnown:          true,
 		ClosedPositionsComplete:     true,
+		WeeklyTradeCount:            6_500,
+		WeeklyAvgTradeInterval:      95 * time.Second,
+		WeeklyProfitPct:             0.22,
+		WeeklyProfitPctKnown:        true,
+		MonthlyTradeCount:           26_000,
+		MonthlyAvgTradeInterval:     100 * time.Second,
+		MonthlyProfitPct:            0.24,
+		MonthlyProfitPctKnown:       true,
 	}
 	r := ScoreShark(f, defaultSharkParams())
 	if r.Promote {
-		t.Fatalf("API path exit_rate=66%% must NOT promote: profit_factor unavailable, proxy requires >=70%%: %v", r.ReasonCodes)
+		t.Fatalf("API path with low profit pct must NOT promote: %v", r.ReasonCodes)
 	}
-	if !contains(r.ReasonCodes, "API_EXIT_RATE_PROXY_FAIL") {
-		t.Fatalf("expected API_EXIT_RATE_PROXY_FAIL: %v", r.ReasonCodes)
+	if !contains(r.ReasonCodes, "WINDOW_PROFIT_PCT_TOO_LOW") {
+		t.Fatalf("expected WINDOW_PROFIT_PCT_TOO_LOW: %v", r.ReasonCodes)
 	}
 	pfAvail, ok := r.FeatureSnapshot["profit_factor_available"].(bool)
 	if !ok || pfAvail {

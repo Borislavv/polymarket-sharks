@@ -116,6 +116,20 @@ type RealizedStats struct {
 	WinRate                float64 // == profitable_exit_rate
 }
 
+// TradeWindowStats summarises trading activity in a rolling window.
+type TradeWindowStats struct {
+	Trades     int
+	FirstTrade *time.Time
+	LastTrade  *time.Time
+}
+
+// RealizedWindowStats summarises realized-cycle performance in a rolling window.
+type RealizedWindowStats struct {
+	Cycles          int
+	TotalPnL        float64
+	TotalEntryStake float64
+}
+
 // GetRealizedStats reads aggregate realized profitability for a wallet.
 // Pure SQL — no per-row JSON parsing. Returns zero-value when no rows yet.
 func (s *Store) GetRealizedStats(ctx context.Context, walletID string) (RealizedStats, error) {
@@ -191,6 +205,46 @@ func (s *Store) GetRealizedStats(ctx context.Context, walletID string) (Realized
 		st.MedianLossUSD = st.AvgLossUSD
 	}
 	return st, nil
+}
+
+// GetTradeWindowStats returns trade activity for [since, now].
+func (s *Store) GetTradeWindowStats(ctx context.Context, walletID string, since time.Time) (TradeWindowStats, error) {
+	const q = `
+		SELECT
+		    COALESCE(count(*),0) AS trades,
+		    min(timestamp)       AS first_trade,
+		    max(timestamp)       AS last_trade
+		FROM wallet_trades
+		WHERE wallet_id = $1::uuid
+		  AND timestamp >= $2`
+	var (
+		st          TradeWindowStats
+		first, last *time.Time
+	)
+	err := s.Pool.QueryRow(ctx, q, walletID, since).Scan(&st.Trades, &first, &last)
+	if err != nil {
+		return st, err
+	}
+	st.FirstTrade = first
+	st.LastTrade = last
+	return st, nil
+}
+
+// GetRealizedWindowStats returns realized-cycle profitability for [since, now].
+// Profit percentage is computed by callers as TotalPnL / TotalEntryStake.
+func (s *Store) GetRealizedWindowStats(ctx context.Context, walletID string, since time.Time) (RealizedWindowStats, error) {
+	const q = `
+		SELECT
+		    COALESCE(count(*),0)        AS cycles,
+		    COALESCE(sum(realized_pnl),0),
+		    COALESCE(sum(entry_notional),0)
+		FROM wallet_realized_trades
+		WHERE wallet_id = $1::uuid
+		  AND exit_time IS NOT NULL
+		  AND exit_time >= $2`
+	var st RealizedWindowStats
+	err := s.Pool.QueryRow(ctx, q, walletID, since).Scan(&st.Cycles, &st.TotalPnL, &st.TotalEntryStake)
+	return st, err
 }
 
 // DiscoverySampleStats summarises the breadth of evidence behind a SHARK or

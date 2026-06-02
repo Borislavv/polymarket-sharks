@@ -135,6 +135,55 @@ type Config struct {
 	InsiderMinConfidence      float64
 	InsiderLowProbPriceThr    float64
 
+	// Weekly lucky-spike strategy (admin-first suspicious-candidate scan).
+	LuckySpikeEnabled                  bool
+	LuckySpikeInterval                 time.Duration
+	LuckySpikeMaxMarkets               int // 0 = all active markets
+	LuckySpikeMarketTradesLimit        int
+	LuckySpikeMarketConcurrency        int
+	LuckySpikeCandidateTradePageSize   int
+	LuckySpikeCandidateTradeMaxPages   int
+	LuckySpikeCandidateMinSampleTrades int
+	LuckySpikeMaxCandidateWallets      int
+	LuckySpikeWalletConcurrency        int
+	LuckySpikeWalletTradePageSize      int
+	LuckySpikeWalletTradeMaxPages      int
+	LuckySpikeWalletActivityMaxPages   int
+	LuckySpikePerWalletTimeout         time.Duration
+
+	LuckySpikeLookback            time.Duration
+	LuckySpikeMaxAvgTradeInterval time.Duration
+	LuckySpikeMinProfitPct        float64
+	LuckySpikeMinTradesPerWeek    int
+	LuckySpikeMinTradesPerMonth   int
+	LuckySpikeMinCoverage         time.Duration
+	LuckySpikeMinObservedTrades   int
+	LuckySpikeMinObservedCoverage time.Duration
+	LuckySpikeMinEntryNotional    float64
+	LuckySpikeMinRealizedPnL      float64
+	LuckySpikeMinRealizedCycles   int
+	LuckySpikeMinScore            int
+	LuckySpikeMinConfidence       float64
+
+	// MLB late-game match strategy (admin-first market timing scan).
+	MLBLateGameEnabled        bool
+	MLBLateGameInterval       time.Duration
+	MLBLateGameMinInning      int
+	MLBLateGameMinAwayDeficit int
+	MLBLateGameMarketLimit    int
+	MLBStatsAPIBaseURL        string
+
+	// Retention / storage safety (hard row caps; never deletes found traders).
+	RetentionEnabled                      bool
+	RetentionInterval                     time.Duration
+	RetentionPerTableTimeout              time.Duration
+	RetentionBatchSize                    int
+	RetentionWalletClosedPositionsMaxRows int64
+	RetentionMarketPriceSamplesMaxRows    int64
+	RetentionHolderSnapshotsMaxRows       int64
+	RetentionCandidateEvidenceMaxRows     int64
+	RetentionWalletScoresMaxRows          int64
+
 	// Cluster
 	ClusterWindowBefore     time.Duration
 	ClusterWindowAfter      time.Duration
@@ -198,6 +247,7 @@ func LoadFromEnv(get func(string) string) (*Config, error) {
 		PolymarketDataAPIBaseURL: strOr(get("POLYMARKET_DATA_API_BASE_URL"), "https://data-api.polymarket.com"),
 		PolymarketCLOBBaseURL:    strOr(get("POLYMARKET_CLOB_BASE_URL"), "https://clob.polymarket.com"),
 		PolymarketWSURL:          strOr(get("POLYMARKET_WS_URL"), "wss://ws-subscriptions-clob.polymarket.com/ws/market"),
+		MLBStatsAPIBaseURL:       strOr(get("MLB_STATS_API_BASE_URL"), "https://statsapi.mlb.com"),
 		LogLevel:                 strOr(get("LOG_LEVEL"), "info"),
 		MetricsAddr:              strOr(get("METRICS_ADDR"), ":9090"),
 		InternalDashboardBaseURL: get("INTERNAL_DASHBOARD_BASE_URL"),
@@ -429,6 +479,127 @@ func LoadFromEnv(get func(string) string) (*Config, error) {
 		return nil, err
 	}
 
+	// Weekly lucky-spike strategy (admin-first suspicious-candidate scan).
+	c.LuckySpikeEnabled = parseBool(get("LUCKY_SPIKE_ENABLED"), false)
+	if c.LuckySpikeInterval, err = parseDur(get("LUCKY_SPIKE_INTERVAL"), 30*time.Minute); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeMaxMarkets, err = parseInt(get("LUCKY_SPIKE_MAX_MARKETS"), 0); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeMarketTradesLimit, err = parseInt(get("LUCKY_SPIKE_MARKET_TRADES_LIMIT"), 40); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeMarketConcurrency, err = parseInt(get("LUCKY_SPIKE_MARKET_CONCURRENCY"), 8); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeCandidateTradePageSize, err = parseInt(get("LUCKY_SPIKE_CANDIDATE_TRADE_PAGE_SIZE"), 500); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeCandidateTradeMaxPages, err = parseInt(get("LUCKY_SPIKE_CANDIDATE_TRADE_MAX_PAGES"), 120); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeCandidateMinSampleTrades, err = parseInt(get("LUCKY_SPIKE_CANDIDATE_MIN_SAMPLE_TRADES"), 6); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeMaxCandidateWallets, err = parseInt(get("LUCKY_SPIKE_MAX_CANDIDATE_WALLETS"), 2000); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeWalletConcurrency, err = parseInt(get("LUCKY_SPIKE_WALLET_CONCURRENCY"), 6); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeWalletTradePageSize, err = parseInt(get("LUCKY_SPIKE_WALLET_TRADE_PAGE_SIZE"), 500); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeWalletTradeMaxPages, err = parseInt(get("LUCKY_SPIKE_WALLET_TRADE_MAX_PAGES"), 10); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeWalletActivityMaxPages, err = parseInt(get("LUCKY_SPIKE_WALLET_ACTIVITY_MAX_PAGES"), 90); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikePerWalletTimeout, err = parseDur(get("LUCKY_SPIKE_PER_WALLET_TIMEOUT"), 120*time.Second); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeLookback, err = parseDur(get("LUCKY_SPIKE_LOOKBACK"), 7*24*time.Hour); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeMaxAvgTradeInterval, err = parseDur(get("LUCKY_SPIKE_MAX_AVG_TRADE_INTERVAL"), 2*time.Minute); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeMinProfitPct, err = parseFloat(get("LUCKY_SPIKE_MIN_PROFIT_PCT"), 0.30); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeMinTradesPerWeek, err = parseInt(get("LUCKY_SPIKE_MIN_TRADES_PER_WEEK"), 5040); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeMinTradesPerMonth, err = parseInt(get("LUCKY_SPIKE_MIN_TRADES_PER_MONTH"), 21600); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeMinCoverage, err = parseDur(get("LUCKY_SPIKE_MIN_COVERAGE"), 6*24*time.Hour); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeMinObservedTrades, err = parseInt(get("LUCKY_SPIKE_MIN_OBSERVED_TRADES"), 1000); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeMinObservedCoverage, err = parseDur(get("LUCKY_SPIKE_MIN_OBSERVED_COVERAGE"), 48*time.Hour); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeMinEntryNotional, err = parseFloat(get("LUCKY_SPIKE_MIN_ENTRY_NOTIONAL"), 0); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeMinRealizedPnL, err = parseFloat(get("LUCKY_SPIKE_MIN_REALIZED_PNL"), 0); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeMinRealizedCycles, err = parseInt(get("LUCKY_SPIKE_MIN_REALIZED_CYCLES"), 30); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeMinScore, err = parseInt(get("LUCKY_SPIKE_MIN_SCORE"), 75); err != nil {
+		return nil, err
+	}
+	if c.LuckySpikeMinConfidence, err = parseFloat(get("LUCKY_SPIKE_MIN_CONFIDENCE"), 0.70); err != nil {
+		return nil, err
+	}
+
+	c.MLBLateGameEnabled = parseBool(get("MLB_LATE_GAME_ENABLED"), false)
+	if c.MLBLateGameInterval, err = parseDur(get("MLB_LATE_GAME_INTERVAL"), 30*time.Second); err != nil {
+		return nil, err
+	}
+	if c.MLBLateGameMinInning, err = parseInt(get("MLB_LATE_GAME_MIN_INNING"), 9); err != nil {
+		return nil, err
+	}
+	if c.MLBLateGameMinAwayDeficit, err = parseInt(get("MLB_LATE_GAME_MIN_AWAY_DEFICIT"), 2); err != nil {
+		return nil, err
+	}
+	if c.MLBLateGameMarketLimit, err = parseInt(get("MLB_LATE_GAME_MARKET_LIMIT"), 0); err != nil {
+		return nil, err
+	}
+
+	c.RetentionEnabled = parseBool(get("RETENTION_ENABLED"), false)
+	if c.RetentionInterval, err = parseDur(get("RETENTION_INTERVAL"), time.Minute); err != nil {
+		return nil, err
+	}
+	if c.RetentionPerTableTimeout, err = parseDur(get("RETENTION_PER_TABLE_TIMEOUT"), 45*time.Second); err != nil {
+		return nil, err
+	}
+	if c.RetentionBatchSize, err = parseInt(get("RETENTION_BATCH_SIZE"), 50_000); err != nil {
+		return nil, err
+	}
+	if c.RetentionWalletClosedPositionsMaxRows, err = parseInt64(get("RETENTION_WALLET_CLOSED_POSITIONS_MAX_ROWS"), 2_000_000); err != nil {
+		return nil, err
+	}
+	if c.RetentionMarketPriceSamplesMaxRows, err = parseInt64(get("RETENTION_MARKET_PRICE_SAMPLES_MAX_ROWS"), 1_000_000); err != nil {
+		return nil, err
+	}
+	if c.RetentionHolderSnapshotsMaxRows, err = parseInt64(get("RETENTION_HOLDER_SNAPSHOTS_MAX_ROWS"), 250_000); err != nil {
+		return nil, err
+	}
+	if c.RetentionCandidateEvidenceMaxRows, err = parseInt64(get("RETENTION_CANDIDATE_EVIDENCE_MAX_ROWS"), 250_000); err != nil {
+		return nil, err
+	}
+	if c.RetentionWalletScoresMaxRows, err = parseInt64(get("RETENTION_WALLET_SCORES_MAX_ROWS"), 500_000); err != nil {
+		return nil, err
+	}
+
 	// Cluster
 	if c.ClusterWindowBefore, err = parseDur(get("CLUSTER_WINDOW_BEFORE"), 3*time.Hour); err != nil {
 		return nil, err
@@ -490,7 +661,7 @@ func LoadFromEnv(get func(string) string) (*Config, error) {
 
 	cats := get("TARGET_CATEGORIES")
 	if cats == "" {
-		cats = "politics,geopolitics,war,military,elections"
+		cats = "all"
 	}
 	for _, s := range strings.Split(cats, ",") {
 		s = strings.TrimSpace(strings.ToLower(s))
@@ -537,6 +708,15 @@ func (c *Config) Validate() error {
 	if c.InsiderMinConfidence < 0 || c.InsiderMinConfidence > 1 {
 		return fmt.Errorf("config: INSIDER_MIN_CONFIDENCE must be in [0,1]")
 	}
+	if c.LuckySpikeMinScore < 0 || c.LuckySpikeMinScore > 100 {
+		return fmt.Errorf("config: LUCKY_SPIKE_MIN_SCORE out of range")
+	}
+	if c.LuckySpikeMinConfidence < 0 || c.LuckySpikeMinConfidence > 1 {
+		return fmt.Errorf("config: LUCKY_SPIKE_MIN_CONFIDENCE must be in [0,1]")
+	}
+	if c.LuckySpikeMinProfitPct <= -1 || c.LuckySpikeMinProfitPct >= 10 {
+		return fmt.Errorf("config: LUCKY_SPIKE_MIN_PROFIT_PCT is out of range")
+	}
 	if c.ClusterMinWallets < 2 {
 		return fmt.Errorf("config: CLUSTER_MIN_WALLETS must be >= 2")
 	}
@@ -545,6 +725,52 @@ func (c *Config) Validate() error {
 	}
 	if c.HotsetMaxMarkets <= 0 {
 		return fmt.Errorf("config: HOTSET_MAX_MARKETS must be > 0")
+	}
+	if c.LuckySpikeInterval <= 0 {
+		return fmt.Errorf("config: LUCKY_SPIKE_INTERVAL must be > 0")
+	}
+	if c.LuckySpikeMarketTradesLimit <= 0 ||
+		c.LuckySpikeMarketConcurrency <= 0 ||
+		c.LuckySpikeCandidateTradePageSize <= 0 ||
+		c.LuckySpikeCandidateTradeMaxPages <= 0 ||
+		c.LuckySpikeCandidateMinSampleTrades <= 0 ||
+		c.LuckySpikeMaxCandidateWallets <= 0 ||
+		c.LuckySpikeWalletConcurrency <= 0 ||
+		c.LuckySpikeWalletTradePageSize <= 0 ||
+		c.LuckySpikeWalletTradeMaxPages <= 0 ||
+		c.LuckySpikeWalletActivityMaxPages <= 0 {
+		return fmt.Errorf("config: lucky-spike limits/concurrency must be > 0")
+	}
+	if c.LuckySpikeLookback <= 0 ||
+		c.LuckySpikeMaxAvgTradeInterval <= 0 ||
+		c.LuckySpikeMinCoverage <= 0 ||
+		c.LuckySpikeMinObservedCoverage <= 0 ||
+		c.LuckySpikePerWalletTimeout <= 0 {
+		return fmt.Errorf("config: lucky-spike durations must be > 0")
+	}
+	if c.LuckySpikeMinTradesPerWeek <= 0 ||
+		c.LuckySpikeMinTradesPerMonth <= 0 ||
+		c.LuckySpikeMinObservedTrades <= 0 ||
+		c.LuckySpikeMinRealizedCycles <= 0 ||
+		c.LuckySpikeMinEntryNotional < 0 ||
+		c.LuckySpikeMinRealizedPnL < 0 {
+		return fmt.Errorf("config: lucky-spike thresholds must be > 0")
+	}
+	if c.MLBLateGameInterval <= 0 ||
+		c.MLBLateGameMinInning <= 0 ||
+		c.MLBLateGameMinAwayDeficit <= 0 ||
+		c.MLBLateGameMarketLimit < 0 {
+		return fmt.Errorf("config: MLB late-game settings are invalid")
+	}
+	if c.RetentionInterval <= 0 ||
+		c.RetentionPerTableTimeout <= 0 ||
+		c.RetentionBatchSize <= 0 ||
+		c.RetentionWalletClosedPositionsMaxRows < 0 ||
+		c.RetentionMarketPriceSamplesMaxRows < 0 ||
+		c.RetentionHolderSnapshotsMaxRows < 0 ||
+		c.RetentionCandidateEvidenceMaxRows < 0 ||
+		c.RetentionWalletScoresMaxRows < 0 {
+		return fmt.Errorf("config: retention settings are invalid")
 	}
 	return nil
 }
@@ -574,6 +800,17 @@ func parseInt(s string, def int) (int, error) {
 	v, err := strconv.Atoi(s)
 	if err != nil {
 		return 0, fmt.Errorf("config: invalid int %q: %w", s, err)
+	}
+	return v, nil
+}
+
+func parseInt64(s string, def int64) (int64, error) {
+	if s == "" {
+		return def, nil
+	}
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("config: invalid int64 %q: %w", s, err)
 	}
 	return v, nil
 }

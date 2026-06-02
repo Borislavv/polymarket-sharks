@@ -101,6 +101,65 @@ func TestGetActivity_RealShape(t *testing.T) {
 	}
 }
 
+func TestGetActivityPaginated_QueryParams(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/activity" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		q := r.URL.Query()
+		want := map[string]string{
+			"user":          "0xabc",
+			"type":          "TRADE",
+			"limit":         "500",
+			"offset":        "3000",
+			"start":         "100",
+			"end":           "200",
+			"sortBy":        "TIMESTAMP",
+			"sortDirection": "DESC",
+		}
+		for k, v := range want {
+			if got := q.Get(k); got != v {
+				t.Fatalf("query %s = %q, want %q", k, got, v)
+			}
+		}
+		w.Write([]byte(`[{"type":"TRADE","proxyWallet":"0xabc","timestamp":150,"transactionHash":"0xtx","conditionId":"0xc","asset":"0xa","side":"BUY","outcome":"Yes","outcomeIndex":0,"price":0.4,"size":10,"usdcSize":4}]`))
+	}))
+	defer srv.Close()
+
+	c := newClient(srv.URL)
+	out, _, err := c.GetActivityPaginated(context.Background(), "0xabc", "TRADE", 500, 3000, 100, 200, "TIMESTAMP", "DESC")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(out) != 1 || out[0].Type != "TRADE" || out[0].Side != "BUY" {
+		t.Fatalf("unexpected activity row: %+v", out)
+	}
+}
+
+func TestGetUserPnLSeries_QueryParams(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/user-pnl" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		q := r.URL.Query()
+		if q.Get("user_address") != "0xabc" || q.Get("interval") != "1w" || q.Get("fidelity") != "1h" {
+			t.Fatalf("unexpected query: %s", r.URL.RawQuery)
+		}
+		w.Write([]byte(`[{"t":100,"p":10.5},{"t":200,"p":42.25}]`))
+	}))
+	defer srv.Close()
+
+	c := newClient(srv.URL)
+	c.UserPnLBaseURL = srv.URL
+	out, _, err := c.GetUserPnLSeries(context.Background(), "0xabc", "1w", "1h")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(out) != 2 || out[0].P.Float64() != 10.5 || out[1].T.Int64() != 200 {
+		t.Fatalf("unexpected pnl series: %+v", out)
+	}
+}
+
 func TestGetUserPositions_RealShape(t *testing.T) {
 	raw, err := os.ReadFile("../testdata/dataapi_positions.json")
 	if err != nil {

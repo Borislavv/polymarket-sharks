@@ -20,6 +20,7 @@ import (
 	"github.com/Borislavv/polymarket-sharks/internal/polymarket/dataapi"
 	"github.com/Borislavv/polymarket-sharks/internal/polymarket/gamma"
 	"github.com/Borislavv/polymarket-sharks/internal/polymarket/nextjs"
+	"github.com/Borislavv/polymarket-sharks/internal/retention"
 	"github.com/Borislavv/polymarket-sharks/internal/storage/postgres"
 	"github.com/Borislavv/polymarket-sharks/internal/telegram"
 	"github.com/Borislavv/polymarket-sharks/internal/walletintel"
@@ -101,6 +102,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	wsConsumer := &marketscan.WSConsumer{Store: store, Cache: tokenCache, Log: log}
 	wsCli.OnEvent(wsConsumer.HandleEvent)
 	njCli := nextjs.New("https://polymarket.com", cfg.HTTPTimeout, cfg.NextJSBuildIDTTL)
+	mlbCli := marketscan.NewMLBStatsClient(polymarket.New(cfg.MLBStatsAPIBaseURL, 2, cfg.HTTPTimeout))
 
 	tg := telegram.New(cfg.TelegramBotToken, cfg.TelegramRPSLimit, cfg.HTTPTimeout)
 	links := alerts.LinkBuilder{
@@ -145,6 +147,8 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			HistMinROI:                 cfg.SharkHistMinROI,
 			HistMinWinRate:             cfg.SharkHistMinWinRate,
 			HistMinAvgStakeUSD:         cfg.SharkHistMinAvgStakeUSD,
+			MaxAvgTradeInterval:        2 * time.Minute,
+			MinWindowProfitPct:         0.30,
 		},
 		InsiderParams: walletintel.InsiderParams{
 			MaxLifetimeTrades:     cfg.InsiderMaxLifetimeTrades,
@@ -156,6 +160,8 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			MinOdds:               cfg.InsiderMinOdds,
 			MaxLifetimeForCapture: cfg.InsiderMaxLifetimeForCapture,
 			HighImpactCategories:  cfg.TargetCategories,
+			MaxAvgTradeInterval:   2 * time.Minute,
+			MinWindowProfitPct:    0.30,
 		},
 		TargetCategories: cfg.TargetCategories,
 		Cooldown:         walletintel.NewScoreCooldown(15 * time.Minute),
@@ -327,6 +333,72 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			Log:      log,
 			Interval: 10 * time.Minute,
 		},
+	}
+	if cfg.LuckySpikeEnabled {
+		a.Workers = append(a.Workers, &walletintel.LuckySpikeWorker{
+			DataAPI:                  dataCli,
+			Store:                    store,
+			Router:                   router,
+			Log:                      log,
+			Links:                    links,
+			Interval:                 cfg.LuckySpikeInterval,
+			MaxMarkets:               cfg.LuckySpikeMaxMarkets,
+			MarketTradesLimit:        cfg.LuckySpikeMarketTradesLimit,
+			MarketConcurrency:        cfg.LuckySpikeMarketConcurrency,
+			CandidateTradePageSize:   cfg.LuckySpikeCandidateTradePageSize,
+			CandidateTradeMaxPages:   cfg.LuckySpikeCandidateTradeMaxPages,
+			CandidateMinSampleTrades: cfg.LuckySpikeCandidateMinSampleTrades,
+			MaxCandidateWallets:      cfg.LuckySpikeMaxCandidateWallets,
+			WalletConcurrency:        cfg.LuckySpikeWalletConcurrency,
+			WalletTradePageSize:      cfg.LuckySpikeWalletTradePageSize,
+			WalletTradeMaxPages:      cfg.LuckySpikeWalletTradeMaxPages,
+			WalletActivityMaxPages:   cfg.LuckySpikeWalletActivityMaxPages,
+			PerWalletFetchTimout:     cfg.LuckySpikePerWalletTimeout,
+			Params: walletintel.LuckySpikeParams{
+				Lookback:            cfg.LuckySpikeLookback,
+				MaxAvgTradeInterval: cfg.LuckySpikeMaxAvgTradeInterval,
+				MinProfitPct:        cfg.LuckySpikeMinProfitPct,
+				MinTradesPerWeek:    cfg.LuckySpikeMinTradesPerWeek,
+				MinTradesPerMonth:   cfg.LuckySpikeMinTradesPerMonth,
+				MinCoverage:         cfg.LuckySpikeMinCoverage,
+				MinObservedTrades:   cfg.LuckySpikeMinObservedTrades,
+				MinObservedCoverage: cfg.LuckySpikeMinObservedCoverage,
+				MinEntryNotional:    cfg.LuckySpikeMinEntryNotional,
+				MinRealizedPnL:      cfg.LuckySpikeMinRealizedPnL,
+				MinRealizedCycles:   cfg.LuckySpikeMinRealizedCycles,
+				MinScore:            cfg.LuckySpikeMinScore,
+				MinConfidence:       cfg.LuckySpikeMinConfidence,
+			},
+		})
+	}
+	if cfg.MLBLateGameEnabled {
+		a.Workers = append(a.Workers, &marketscan.MLBLateGameWorker{
+			MLB:            mlbCli,
+			Store:          store,
+			Router:         router,
+			Log:            log,
+			Links:          links,
+			Enabled:        true,
+			Interval:       cfg.MLBLateGameInterval,
+			MinInning:      cfg.MLBLateGameMinInning,
+			MinAwayDeficit: cfg.MLBLateGameMinAwayDeficit,
+			MarketLimit:    cfg.MLBLateGameMarketLimit,
+		})
+	}
+	if cfg.RetentionEnabled {
+		a.Workers = append(a.Workers, &retention.Worker{
+			Store:                        store,
+			Log:                          log,
+			Enabled:                      true,
+			Interval:                     cfg.RetentionInterval,
+			PerTableTimeout:              cfg.RetentionPerTableTimeout,
+			BatchSize:                    cfg.RetentionBatchSize,
+			WalletClosedPositionsMaxRows: cfg.RetentionWalletClosedPositionsMaxRows,
+			MarketPriceSamplesMaxRows:    cfg.RetentionMarketPriceSamplesMaxRows,
+			HolderSnapshotsMaxRows:       cfg.RetentionHolderSnapshotsMaxRows,
+			CandidateEvidenceMaxRows:     cfg.RetentionCandidateEvidenceMaxRows,
+			WalletScoresMaxRows:          cfg.RetentionWalletScoresMaxRows,
+		})
 	}
 	return a, nil
 }

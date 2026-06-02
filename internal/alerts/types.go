@@ -29,6 +29,8 @@ const (
 	TypeWalletDemoted               = "WALLET_DEMOTED"
 	TypeInsiderStreakBrokenAdmin    = "INSIDER_STREAK_BROKEN"
 	TypeSharkFalsePositiveCorrected = "SHARK_FALSE_POSITIVE_CORRECTED"
+	TypeLuckySpikeCandidate         = "LUCKY_SPIKE_CANDIDATE"
+	TypeMLBLateGame                 = "MLB_LATE_GAME"
 )
 
 // DiscoveryAlert is the admin-channel payload describing a freshly promoted
@@ -115,6 +117,73 @@ type DiscoveryAlert struct {
 	VetoOpenPositionRatio   float64 // open_count / total_count
 	VetoPositionsChecked    int
 	VetoOpenUnresolved      int
+}
+
+// LuckySpikeAlert is an admin-only candidate alert for suspicious
+// high-frequency + high-profit behavior.
+type LuckySpikeAlert struct {
+	WalletShort string
+	WalletFull  string
+	Pseudonym   string
+	ProfileSlug string
+
+	Score      int
+	Confidence float64
+
+	WeeklyTradeCount       int
+	WeeklyDistinctMarkets  int
+	WeeklyRealizedCycles   int
+	WeeklyProfitableCycles int
+	WeeklyLosingCycles     int
+	WeeklyProfitPct        float64
+	MonthlyProfitPct       float64
+	MonthlyTradeCount      int
+	MonthlyRealizedCycles  int
+
+	WeeklyCoverageHours            float64
+	AvgTradeIntervalMinutes        float64
+	MonthlyAvgTradeIntervalMinutes float64
+	AvgWeeklyTradeNotionalUSD      float64
+	TradeHistoryPartialHint        string
+	DataQuality                    string
+	ReasonHumanized                string
+	ReasonCodes                    []string
+	DedupKey                       string
+	DashboardURL                   string
+}
+
+// MLBLateGameAlert is an admin-only market timing alert for baseball games
+// where the away team is batting in the top 9th/extra innings while trailing.
+type MLBLateGameAlert struct {
+	GamePK int
+
+	AwayTeam  string
+	HomeTeam  string
+	AwayScore int
+	HomeScore int
+	Deficit   int
+
+	Inning      int
+	InningHalf  string
+	InningState string
+	Status      string
+	GameTime    time.Time
+
+	MarketSlug     string
+	MarketTitle    string
+	EventSlug      string
+	EventTitle     string
+	MatchedMarkets []MLBMatchedMarket
+
+	ReasonCodes []string
+	DedupKey    string
+}
+
+type MLBMatchedMarket struct {
+	Slug       string
+	Title      string
+	EventSlug  string
+	EventTitle string
 }
 
 // SharkBet is the payload for the SHARK NEW BET alert.

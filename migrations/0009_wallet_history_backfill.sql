@@ -40,9 +40,11 @@ CREATE INDEX IF NOT EXISTS idx_wcp_wallet_time
 CREATE INDEX IF NOT EXISTS idx_wcp_wallet_market
     ON wallet_closed_positions(wallet_id, condition_id, outcome);
 -- Last-observed snapshot per (wallet, condition, outcome) is what scoring
--- reads; older rows are kept for audit. Unique constraint pinned per snapshot
--- timestamp so backfills with slightly different payloads do not collide.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_wcp_wallet_position_observed
+-- reads; older rows are kept for audit.
+--
+-- NOTE: this index is intentionally non-unique to keep migration idempotent on
+-- historical datasets that may already contain duplicate observed_at rows.
+CREATE INDEX IF NOT EXISTS idx_wcp_wallet_position_observed
     ON wallet_closed_positions(wallet_id, condition_id, outcome, observed_at);
 
 CREATE TABLE IF NOT EXISTS wallet_history_backfills (

@@ -121,6 +121,8 @@ type MarketSummary struct {
 	ID                  string
 	ConditionID         string
 	EventID             string
+	EventSlug           string
+	EventTitle          string
 	Slug                string
 	Question            string
 	Description         string
@@ -183,4 +185,96 @@ func (s *Store) GetMarketByConditionID(ctx context.Context, conditionID string) 
 		&m.Description, &m.ResolutionSource, &m.RulesText, &m.Volume, &m.Liquidity,
 		&m.NegRisk, &m.UMAResolutionStatus, &m.UpdatedAt)
 	return m, err
+}
+
+// ListActiveMarkets returns all active, non-closed markets (optionally
+// bounded by limit). Used by global discovery workers that must inspect the
+// full universe instead of the hotset subset.
+func (s *Store) ListActiveMarkets(ctx context.Context, limit int) ([]MarketSummary, error) {
+	base := `
+		SELECT id::text, condition_id, COALESCE(event_id::text,''), COALESCE(slug,''),
+		       COALESCE(question,''), COALESCE(description,''),
+		       COALESCE(resolution_source,''), COALESCE(rules_text,''),
+		       COALESCE(volume,0), COALESCE(liquidity,0),
+		       COALESCE(neg_risk,false), COALESCE(uma_resolution_status,''),
+		       updated_at
+		FROM markets
+		WHERE active = true AND closed = false
+		ORDER BY updated_at DESC, condition_id ASC
+	`
+	var (
+		rows pgxRows
+		err  error
+	)
+	if limit > 0 {
+		rows, err = s.Pool.Query(ctx, base+` LIMIT $1`, limit)
+	} else {
+		rows, err = s.Pool.Query(ctx, base)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MarketSummary
+	for rows.Next() {
+		var m MarketSummary
+		if err := rows.Scan(&m.ID, &m.ConditionID, &m.EventID, &m.Slug, &m.Question,
+			&m.Description, &m.ResolutionSource, &m.RulesText, &m.Volume, &m.Liquidity,
+			&m.NegRisk, &m.UMAResolutionStatus, &m.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// ListActiveMarketsWithEvents returns active markets with enough event context
+// for text-based strategy matchers and alert links.
+func (s *Store) ListActiveMarketsWithEvents(ctx context.Context, limit int) ([]MarketSummary, error) {
+	base := `
+		SELECT m.id::text, m.condition_id, COALESCE(m.event_id::text,''),
+		       COALESCE(e.slug,''), COALESCE(e.title,''),
+		       COALESCE(m.slug,''), COALESCE(m.question,''), COALESCE(m.description,''),
+		       COALESCE(m.resolution_source,''), COALESCE(m.rules_text,''),
+		       COALESCE(m.volume,0), COALESCE(m.liquidity,0),
+		       COALESCE(m.neg_risk,false), COALESCE(m.uma_resolution_status,''),
+		       m.updated_at
+		FROM markets m
+		LEFT JOIN events e ON e.id = m.event_id
+		WHERE m.active = true AND m.closed = false
+		ORDER BY m.updated_at DESC, m.condition_id ASC
+	`
+	var (
+		rows pgxRows
+		err  error
+	)
+	if limit > 0 {
+		rows, err = s.Pool.Query(ctx, base+` LIMIT $1`, limit)
+	} else {
+		rows, err = s.Pool.Query(ctx, base)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MarketSummary
+	for rows.Next() {
+		var m MarketSummary
+		if err := rows.Scan(&m.ID, &m.ConditionID, &m.EventID, &m.EventSlug, &m.EventTitle,
+			&m.Slug, &m.Question, &m.Description, &m.ResolutionSource, &m.RulesText,
+			&m.Volume, &m.Liquidity, &m.NegRisk, &m.UMAResolutionStatus, &m.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// pgxRows is the minimal subset we use from pgx.Rows so ListActiveMarkets can
+// build a small conditional query without duplicating scan loops.
+type pgxRows interface {
+	Close()
+	Err() error
+	Next() bool
+	Scan(dest ...any) error
 }

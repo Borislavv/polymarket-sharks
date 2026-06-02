@@ -57,6 +57,80 @@
 | `INSIDER_MIN_CONFIDENCE` | `0.60` |
 | `INSIDER_LOW_PROB_PRICE_THRESHOLD` | `0.20` |
 
+## Weekly lucky-spike strategy (admin-first)
+
+Scans all active markets and flags wallets with sustained weekly
+high-frequency trading plus elevated realized profit percentage.
+
+| key | default | notes |
+|---|---|---|
+| `LUCKY_SPIKE_ENABLED` | `false` | feature flag |
+| `LUCKY_SPIKE_INTERVAL` | `30m` | full scan cadence |
+| `LUCKY_SPIKE_MAX_MARKETS` | `0` | `0` means all active markets |
+| `LUCKY_SPIKE_MARKET_TRADES_LIMIT` | `40` | legacy per-market fallback sample size |
+| `LUCKY_SPIKE_MARKET_CONCURRENCY` | `8` | legacy per-market fallback concurrency |
+| `LUCKY_SPIKE_CANDIDATE_TRADE_PAGE_SIZE` | `500` | global `/trades` page size for streaming candidate discovery |
+| `LUCKY_SPIKE_CANDIDATE_TRADE_MAX_PAGES` | `120` | max global `/trades` pages per cycle |
+| `LUCKY_SPIKE_CANDIDATE_MIN_SAMPLE_TRADES` | `6` | recent global-stream trades needed before a wallet is evaluated |
+| `LUCKY_SPIKE_MAX_CANDIDATE_WALLETS` | `2000` | cap per cycle |
+| `LUCKY_SPIKE_WALLET_CONCURRENCY` | `6` | concurrent wallet evaluations |
+| `LUCKY_SPIKE_WALLET_TRADE_PAGE_SIZE` | `500` | per-page wallet history / positions fetch |
+| `LUCKY_SPIKE_WALLET_TRADE_MAX_PAGES` | `10` | positions/P&L pagination safety cap |
+| `LUCKY_SPIKE_WALLET_ACTIVITY_MAX_PAGES` | `90` | `/activity` history pages per wallet; after offset `3000`, crawler continues with `end=<oldest_ts-1>` |
+| `LUCKY_SPIKE_PER_WALLET_TIMEOUT` | `120s` | timeout per wallet evaluation |
+| `LUCKY_SPIKE_LOOKBACK` | `168h` | weekly window (7 days) |
+| `LUCKY_SPIKE_MAX_AVG_TRADE_INTERVAL` | `2m` | frequency gate |
+| `LUCKY_SPIKE_MIN_PROFIT_PCT` | `0.30` | strict gate is `profit_pct > 0.30` |
+| `LUCKY_SPIKE_MIN_TRADES_PER_WEEK` | `5040` | 7d / 2m |
+| `LUCKY_SPIKE_MIN_TRADES_PER_MONTH` | `21600` | 30d / 2m |
+| `LUCKY_SPIKE_MIN_COVERAGE` | `144h` | activity span floor (6 days) |
+| `LUCKY_SPIKE_MIN_OBSERVED_TRADES` | `1000` | cap-aware lower-bound sample size when Data API history is truncated |
+| `LUCKY_SPIKE_MIN_OBSERVED_COVERAGE` | `48h` | cap-aware lower-bound observed span |
+| `LUCKY_SPIKE_MIN_ENTRY_NOTIONAL` | `0` | optional realized entry-notional floor for profit gate |
+| `LUCKY_SPIKE_MIN_REALIZED_PNL` | `0` | optional realized PnL floor for profit gate |
+| `LUCKY_SPIKE_MIN_REALIZED_CYCLES` | `30` | min Polymarket position sample (reconstructed cycles are diagnostic fallback only) |
+| `LUCKY_SPIKE_MIN_SCORE` | `75` | promotion threshold inside strategy |
+| `LUCKY_SPIKE_MIN_CONFIDENCE` | `0.70` | confidence floor |
+
+## MLB late-game match strategy (admin-first)
+
+Scans live MLB/baseball games and flags active Polymarket match markets when
+the away team is batting in top 9+ or extras while trailing by at least two
+runs. This is a market-timing signal, not a trader-ranking strategy.
+
+| key | default | notes |
+|---|---|---|
+| `MLB_LATE_GAME_ENABLED` | `false` | feature flag |
+| `MLB_LATE_GAME_INTERVAL` | `30s` | scoreboard + market matching cadence |
+| `MLB_LATE_GAME_MIN_INNING` | `9` | `9` means top 9th and top extra innings |
+| `MLB_LATE_GAME_MIN_AWAY_DEFICIT` | `2` | away team must trail by at least this many runs |
+| `MLB_LATE_GAME_MARKET_LIMIT` | `0` | `0` means scan all active markets in local DB |
+| `MLB_STATS_API_BASE_URL` | `https://statsapi.mlb.com` | public MLB Stats API base URL |
+
+## Retention / storage safety
+
+Hard row-cap worker for high-volume derived/diagnostic tables. It does not
+delete `wallets`, `wallet_watchlist`, `watched_bets`, lifecycle/exit rows,
+alerts, Telegram deliveries, markets/events, or watched trader identity.
+
+`wallet_closed_positions` has a special first phase: each sweep deletes only
+legacy duplicates and keeps the latest row per `(wallet_id, condition_id,
+outcome)`. The global row cap for that table is applied only after a cycle
+where no duplicate rows were deleted, so latest-state correctness wins over
+raw space pressure.
+
+| key | default | notes |
+|---|---|---|
+| `RETENTION_ENABLED` | `false` | feature flag |
+| `RETENTION_INTERVAL` | `1m` | sweep cadence; first sweep runs immediately |
+| `RETENTION_PER_TABLE_TIMEOUT` | `45s` | timeout per prune statement |
+| `RETENTION_BATCH_SIZE` | `50000` | max rows deleted per table/reason per sweep |
+| `RETENTION_WALLET_CLOSED_POSITIONS_MAX_ROWS` | `2000000` | `0` disables cap; watchlist wallets are protected |
+| `RETENTION_MARKET_PRICE_SAMPLES_MAX_ROWS` | `1000000` | oldest samples removed first |
+| `RETENTION_HOLDER_SNAPSHOTS_MAX_ROWS` | `250000` | oldest snapshots removed first |
+| `RETENTION_CANDIDATE_EVIDENCE_MAX_ROWS` | `250000` | non-watchlist evidence only |
+| `RETENTION_WALLET_SCORES_MAX_ROWS` | `500000` | non-watchlist, non-promoted scores only; latest per wallet/strategy protected |
+
 ## Cluster
 
 | key | default |
@@ -122,5 +196,5 @@ Tracks watched-wallet positions from opening BUY to selling/closing SELL.
 
 | key | default |
 |---|---|
-| `TARGET_CATEGORIES` | `politics,geopolitics,war,military,elections` (comma-separated) |
+| `TARGET_CATEGORIES` | `all` (`all`/`*` = no category filter; or comma-separated slugs) |
 | `INTERNAL_DASHBOARD_BASE_URL` | empty; optional internal dashboard link base |

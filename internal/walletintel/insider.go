@@ -3,6 +3,7 @@ package walletintel
 import (
 	"math"
 	"strings"
+	"time"
 )
 
 // ScoreInsiderLike evaluates a candidate wallet+bet for suspicious
@@ -46,6 +47,16 @@ func ScoreInsiderLike(f WalletFacts, p InsiderParams) ScoreResult {
 	if minOdds <= 0 {
 		minOdds = 3.0
 	}
+	maxAvgInterval := p.MaxAvgTradeInterval
+	if maxAvgInterval <= 0 {
+		maxAvgInterval = 2 * time.Minute
+	}
+	minWindowProfitPct := p.MinWindowProfitPct
+	if minWindowProfitPct <= 0 {
+		minWindowProfitPct = 0.30
+	}
+	minTradesWeek := int((7 * 24 * time.Hour) / maxAvgInterval)
+	minTradesMonth := int((30 * 24 * time.Hour) / maxAvgInterval)
 	maxPriceForOdds := 1.0 / minOdds
 
 	snap["score_version"] = ScoreVersion
@@ -127,6 +138,23 @@ func ScoreInsiderLike(f WalletFacts, p InsiderParams) ScoreResult {
 		reasons = appendUnique(reasons, "HIGH_IMPACT_MARKET")
 	}
 
+	weeklyFreqOK := f.WeeklyTradeCount >= minTradesWeek && f.WeeklyAvgTradeInterval > 0 && f.WeeklyAvgTradeInterval <= maxAvgInterval
+	monthlyFreqOK := f.MonthlyTradeCount >= minTradesMonth && f.MonthlyAvgTradeInterval > 0 && f.MonthlyAvgTradeInterval <= maxAvgInterval
+	freqOK := weeklyFreqOK || monthlyFreqOK
+	if freqOK {
+		reasons = appendUnique(reasons, "HIGH_FREQUENCY_ACTIVITY")
+	} else {
+		reasons = appendUnique(reasons, "LOW_FREQUENCY_ACTIVITY")
+	}
+	weeklyProfitOK := f.WeeklyProfitPctKnown && f.WeeklyProfitPct > minWindowProfitPct
+	monthlyProfitOK := f.MonthlyProfitPctKnown && f.MonthlyProfitPct > minWindowProfitPct
+	windowProfitOK := weeklyProfitOK || monthlyProfitOK
+	if windowProfitOK {
+		reasons = appendUnique(reasons, "WINDOW_PROFIT_PCT_ABOVE_30PCT")
+	} else {
+		reasons = appendUnique(reasons, "WINDOW_PROFIT_PCT_TOO_LOW")
+	}
+
 	// Streak state.
 	cleanStreak := f.InsiderStreakClean && f.LifetimeLosingCount == 0
 	if cleanStreak {
@@ -167,6 +195,8 @@ func ScoreInsiderLike(f WalletFacts, p InsiderParams) ScoreResult {
 		!bigBet ||
 		!highOdds ||
 		!highImpact ||
+		!freqOK ||
+		!windowProfitOK ||
 		(!cleanStreak && f.LifetimeLosingCount > 0)
 
 	promote := !hardBlock
@@ -174,11 +204,27 @@ func ScoreInsiderLike(f WalletFacts, p InsiderParams) ScoreResult {
 		reasons = appendUnique(reasons, "INSIDER_LIKE_CANDIDATE")
 	}
 
-	conf := insiderConfidence(f, b, directionKnown, bigBet, highOdds, highImpact, cleanStreak)
+	conf := insiderConfidence(f, b, directionKnown, bigBet, highOdds, highImpact, cleanStreak, freqOK, windowProfitOK)
 
 	snap["promotion_path"] = pickIfStr(promote, "insider_first_big_bet", "none")
 	snap["clean_streak"] = cleanStreak
 	snap["streak_continues"] = cleanStreak && lowHistory && bigBet && highOdds
+	snap["weekly_trade_count"] = f.WeeklyTradeCount
+	snap["weekly_avg_trade_interval_minutes"] = f.WeeklyAvgTradeInterval.Minutes()
+	snap["weekly_profit_pct"] = f.WeeklyProfitPct
+	snap["weekly_profit_pct_known"] = f.WeeklyProfitPctKnown
+	snap["monthly_trade_count"] = f.MonthlyTradeCount
+	snap["monthly_avg_trade_interval_minutes"] = f.MonthlyAvgTradeInterval.Minutes()
+	snap["monthly_profit_pct"] = f.MonthlyProfitPct
+	snap["monthly_profit_pct_known"] = f.MonthlyProfitPctKnown
+	snap["high_frequency_gate_pass"] = freqOK
+	snap["weekly_frequency_gate_pass"] = weeklyFreqOK
+	snap["monthly_frequency_gate_pass"] = monthlyFreqOK
+	snap["window_profit_pct_gate_pass"] = windowProfitOK
+	snap["weekly_window_profit_gate_pass"] = weeklyProfitOK
+	snap["monthly_window_profit_gate_pass"] = monthlyProfitOK
+	snap["max_avg_trade_interval_minutes"] = maxAvgInterval.Minutes()
+	snap["min_window_profit_pct"] = minWindowProfitPct
 
 	return ScoreResult{
 		Strategy:        "insider_like_score",
@@ -242,7 +288,7 @@ func insiderHistoricalScore(f WalletFacts, b *NewBetContext, bigBet, highOdds, h
 	return int(math.Round(s))
 }
 
-func insiderConfidence(f WalletFacts, b *NewBetContext, directionKnown, bigBet, highOdds, highImpact, cleanStreak bool) float64 {
+func insiderConfidence(f WalletFacts, b *NewBetContext, directionKnown, bigBet, highOdds, highImpact, cleanStreak, freqOK, windowProfitOK bool) float64 {
 	conf := 1.0
 	if !directionKnown {
 		conf *= 0.0
@@ -259,6 +305,12 @@ func insiderConfidence(f WalletFacts, b *NewBetContext, directionKnown, bigBet, 
 	if !cleanStreak {
 		conf *= 0.5
 	}
+	if !freqOK {
+		conf *= 0.6
+	}
+	if !windowProfitOK {
+		conf *= 0.6
+	}
 	if f.LifetimeTradeCount > 0 && !f.HistoricalPnLKnown {
 		conf *= 0.85
 	}
@@ -272,12 +324,16 @@ func insiderConfidence(f WalletFacts, b *NewBetContext, directionKnown, bigBet, 
 }
 
 func categoryMatches(cat string, list []string) bool {
-	if cat == "" || len(list) == 0 {
+	if len(list) == 0 {
 		return false
 	}
 	lc := strings.ToLower(cat)
 	for _, x := range list {
-		if strings.ToLower(strings.TrimSpace(x)) == lc {
+		s := strings.ToLower(strings.TrimSpace(x))
+		if s == "all" || s == "*" {
+			return true
+		}
+		if lc != "" && s == lc {
 			return true
 		}
 	}

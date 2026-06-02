@@ -7,9 +7,10 @@ Single-binary Go service that monitors Polymarket events/markets, scores wallets
 1. **Discovery**: pulls events/markets from Gamma for configured categories (politics, geopolitics, war, military, elections).
 2. **Hotset**: keeps a bounded list of high-attention markets and subscribes to their CLOB WS for freshness/book signals.
 3. **Holder scan**: pulls top holders per hotset market; deep-scans top-N markets via `/v1/market-positions`.
-4. **Scoring**: assembles wallet facts and runs four deterministic strategies:
+4. **Scoring**: assembles wallet facts and runs deterministic strategies:
    - `shark_score` — mature, follow-worthy traders
    - `insider_like_score` — suspicious informed-flow candidates
+   - `lucky_spike_score` — high-frequency + high profit-% suspicious candidates (admin-first)
    - `rules_risk_modifier` — discounts ambiguous markets
    - `score_arbitration` — chooses class & severity, blocks user alerts under blocking rules risk
 5. **Watchlist promotion**: persists shark/insider classifications with full feature snapshot.

@@ -3,6 +3,7 @@ package walletintel
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func defaultInsiderParams() InsiderParams {
@@ -36,6 +37,14 @@ func freshInsiderFacts() WalletFacts {
 			MarketCategory:     "war",
 			MarketIsHighImpact: true,
 		},
+		WeeklyTradeCount:        6_000,
+		WeeklyAvgTradeInterval:  100 * time.Second,
+		WeeklyProfitPct:         0.45,
+		WeeklyProfitPctKnown:    true,
+		MonthlyTradeCount:       25_000,
+		MonthlyAvgTradeInterval: 105 * time.Second,
+		MonthlyProfitPct:        0.38,
+		MonthlyProfitPctKnown:   true,
 	}
 }
 

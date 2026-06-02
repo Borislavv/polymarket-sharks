@@ -82,7 +82,40 @@ strings only ever use "suspicious informed-flow candidate".
 
 ---
 
-## C. `rules_risk_modifier`
+## C. `lucky_spike_score`
+
+Goal: find suspicious high-frequency profitable traders/bots across the full
+Polymarket trade stream. The detector watches the global `/trades` feed,
+evaluates candidates as soon as they show recent high-frequency activity, then
+pulls wallet history to verify realized profitability.
+
+### Gates
+- **Frequency**: strict mode requires the configured full-window count (`5040` trades/week at 2m cadence; monthly fields are diagnostic/secondary). Wallet history is fetched for the weekly lookback from `/activity` with `start`, descending offset pages up to the verified offset cap, and `end=<oldest_ts-1>` continuation; `/trades` is used only as a recent candidate radar. If the local activity page safety cap truncates history, cap-aware observed mode can pass with `LUCKY_SPIKE_MIN_OBSERVED_TRADES`, observed coverage, and observed average interval `<= LUCKY_SPIKE_MAX_AVG_TRADE_INTERVAL`.
+- **Coverage**: strict mode requires `LUCKY_SPIKE_MIN_COVERAGE`; observed mode requires `LUCKY_SPIKE_MIN_OBSERVED_COVERAGE`.
+- **Profitability**: Polymarket-native `profit_pct = profile_pnl_delta / entry_notional` must be strictly above `LUCKY_SPIKE_MIN_PROFIT_PCT`. `profile_pnl_delta` comes from `user-pnl-api.polymarket.com/user-pnl`; if that endpoint fails, the worker falls back to `positions.cashPnl`. `entry_notional` uses `positions.initialValue` first, then `totalBought * avgPrice` as a fallback.
+- **Sample quality**: Polymarket position count in the weekly traded markets is diagnostic only. It affects score/confidence and reason codes, but it is not a hard promotion gate because the business signal is high frequency plus Polymarket-native profit.
+
+### Components (max = 100)
+
+| component | max | rule |
+|---|---|---|
+| frequency_score | 50 | strict or observed trade-frequency ratio |
+| profit_score | 35 | uplift above configured Polymarket position profit_pct threshold |
+| sample_score | 15 | Polymarket position sample ratio vs min threshold |
+| coverage_bonus | +5 | added when weekly span gate passes |
+
+### Confidence
+Built from frequency/sample/coverage ratios and reduced by partial-history signals (`DATA_API_OFFSET_CAP_3000`, local page cap).
+
+### Promotion
+Frequency, coverage, and profit hard gates pass AND `score >= LUCKY_SPIKE_MIN_SCORE` AND `confidence >= LUCKY_SPIKE_MIN_CONFIDENCE`.
+
+### Reason codes
+`WEEKLY_HIGH_FREQUENCY`, `MONTHLY_HIGH_FREQUENCY`, `WEEKLY_OBSERVED_HIGH_FREQUENCY`, `MONTHLY_OBSERVED_HIGH_FREQUENCY`, `PARTIAL_HISTORY_LOWER_BOUND`, `WEEKLY_SUSTAINED_ACTIVITY`, `OBSERVED_SUSTAINED_ACTIVITY`, `POLYMARKET_POSITION_SAMPLE_OK`, `WINDOW_PROFIT_PCT_ABOVE_30PCT`, `SUSPECTED_LUCK_SPIKE_PATTERN`, `NOT_LEGAL_INSIDER_CLAIM`.
+
+---
+
+## D. `rules_risk_modifier`
 
 Goal: do not overpromote markets with ambiguous resolution.
 
@@ -104,7 +137,7 @@ Goal: do not overpromote markets with ambiguous resolution.
 
 ---
 
-## D. `score_arbitration`
+## E. `score_arbitration`
 
 Goal: single final verdict.
 
