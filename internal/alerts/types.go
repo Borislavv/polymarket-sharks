@@ -200,7 +200,7 @@ type SharkBet struct {
 	RealizedPnL   float64
 	RealizedKnown bool
 
-	// v4 historical evidence — sourced from wallet_closed_positions.
+	// v4 historical evidence — sourced from wallet_closed_position_latest.
 	ClosedPositionsCount int
 	HistoricalWinRate    float64
 	HistoricalROI        float64

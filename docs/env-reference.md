@@ -113,6 +113,11 @@ Hard row-cap worker for high-volume derived/diagnostic tables. It does not
 delete `wallets`, `wallet_watchlist`, `watched_bets`, lifecycle/exit rows,
 alerts, Telegram deliveries, markets/events, or watched trader identity.
 
+Hot-path closed-position scoring reads `wallet_closed_position_latest`, a
+compact latest-state table. The older `wallet_closed_positions` table is
+treated as legacy high-volume storage and retained independently, so startup
+and scoring do not need to scan the historical snapshot table.
+
 `wallet_closed_positions` has a special first phase: each sweep deletes only
 legacy duplicates and keeps the latest row per `(wallet_id, condition_id,
 outcome)`. The global row cap for that table is applied only after a cycle

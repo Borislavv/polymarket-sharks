@@ -10,7 +10,7 @@ import (
 )
 
 // ReconcileInsiderStreaks audits every active/watch_only insider_like row.
-// If wallet_closed_positions now shows any losing closed position, the row is
+// If wallet_closed_position_latest now shows any losing closed position, the row is
 // moved to status='streak_broken' so the watched-wallet worker no longer
 // emits insider-like alerts for it. The check is read-only beyond the demote.
 func ReconcileInsiderStreaks(ctx context.Context, store *postgres.Store, log *slog.Logger) (int, error) {

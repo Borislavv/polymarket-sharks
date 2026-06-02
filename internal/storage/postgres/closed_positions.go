@@ -6,10 +6,10 @@ import (
 	"time"
 )
 
-// ClosedPositionRow is the storage-level representation of a wallet's
-// closed-position record. One row per (wallet_id, condition_id, outcome):
-// each refresh either updates the existing row in place or inserts a new
-// one. Scoring reads the same row (no longer DISTINCT-ON history).
+// ClosedPositionRow is the storage-level representation of a wallet's latest
+// closed-position record. One row per (wallet_id, condition_id, outcome) lives
+// in wallet_closed_position_latest; the legacy wallet_closed_positions table is
+// retention-only and is no longer part of the hot scoring path.
 type ClosedPositionRow struct {
 	WalletID           string
 	ConditionID        string
@@ -36,12 +36,8 @@ type ClosedPositionUpsertResult struct {
 }
 
 // UpsertClosedPositions writes a batch of closed-position records under the
-// latest-state model. For each row it updates the existing row matching
-// (wallet_id, condition_id, outcome) or inserts when none exists. The CTE
-// form below does NOT depend on a unique constraint, so it remains correct
-// against the production table both before and after the dedup cleanup
-// adds uq_wcp_wallet_position. first_seen_at is preserved across updates;
-// last_seen_at and observed_at advance every cycle.
+// latest-state model. first_seen_at is preserved across updates; last_seen_at
+// and observed_at advance every cycle.
 func (s *Store) UpsertClosedPositions(ctx context.Context, walletID string, rows []ClosedPositionRow) (ClosedPositionUpsertResult, error) {
 	var res ClosedPositionUpsertResult
 	if len(rows) == 0 {
@@ -52,50 +48,41 @@ func (s *Store) UpsertClosedPositions(ctx context.Context, walletID string, rows
 		return res, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	// Update-or-insert in a single statement. The UPDATE branch matches every
-	// row for the key (so duplicate legacy rows are kept in sync until the
-	// cleanup script removes them); the INSERT runs only when no row existed.
 	const q = `
-		WITH upd AS (
-		    UPDATE wallet_closed_positions
-		    SET market_id            = COALESCE(NULLIF($3,'')::uuid, market_id),
-		        event_slug           = $4,
-		        outcome_index        = $6,
-		        total_bought         = $7,
-		        realized_pnl         = $8,
-		        avg_price            = $9,
-		        current_value        = $10,
-		        percent_pnl          = $11,
-		        percent_realized_pnl = $12,
-		        size_at_observation  = $13,
-		        is_closed            = $14,
-		        closed_at            = $15,
-		        raw                  = $16::jsonb,
-		        observed_at          = now(),
-		        last_seen_at         = now(),
-		        first_seen_at        = COALESCE(first_seen_at, now())
-		    WHERE wallet_id = $1::uuid
-		      AND condition_id = $2
-		      AND outcome = $5
-		    RETURNING 1
-		),
-		ins AS (
-		    INSERT INTO wallet_closed_positions
+		WITH upsert AS (
+		    INSERT INTO wallet_closed_position_latest
 		        (wallet_id, condition_id, market_id, event_slug, outcome, outcome_index,
 		         total_bought, realized_pnl, avg_price, current_value,
 		         percent_pnl, percent_realized_pnl,
 		         size_at_observation, is_closed, closed_at, raw,
 		         observed_at, first_seen_at, last_seen_at)
-		    SELECT $1::uuid, $2, NULLIF($3,'')::uuid, $4, $5, $6,
-		           $7, $8, $9, $10, $11, $12,
-		           $13, $14, $15, $16::jsonb,
-		           now(), now(), now()
-		    WHERE NOT EXISTS (SELECT 1 FROM upd)
-		    RETURNING 1
+		    VALUES
+		        ($1::uuid, COALESCE($2,''), NULLIF($3,'')::uuid, $4, COALESCE($5,''), $6,
+		         $7, $8, $9, $10, $11, $12,
+		         $13, $14, $15, $16::jsonb,
+		         now(), now(), now())
+		    ON CONFLICT (wallet_id, condition_id, outcome) DO UPDATE SET
+		        market_id            = COALESCE(EXCLUDED.market_id, wallet_closed_position_latest.market_id),
+		        event_slug           = EXCLUDED.event_slug,
+		        outcome_index        = EXCLUDED.outcome_index,
+		        total_bought         = EXCLUDED.total_bought,
+		        realized_pnl         = EXCLUDED.realized_pnl,
+		        avg_price            = EXCLUDED.avg_price,
+		        current_value        = EXCLUDED.current_value,
+		        percent_pnl          = EXCLUDED.percent_pnl,
+		        percent_realized_pnl = EXCLUDED.percent_realized_pnl,
+		        size_at_observation  = EXCLUDED.size_at_observation,
+		        is_closed            = EXCLUDED.is_closed,
+		        closed_at            = EXCLUDED.closed_at,
+		        raw                  = EXCLUDED.raw,
+		        observed_at          = now(),
+		        last_seen_at         = now()
+		    RETURNING (xmax = 0) AS inserted
 		)
 		SELECT
-		    (SELECT count(*) FROM upd) AS updated,
-		    (SELECT count(*) FROM ins) AS inserted`
+		    CASE WHEN inserted THEN 0 ELSE 1 END AS updated,
+		    CASE WHEN inserted THEN 1 ELSE 0 END AS inserted
+		FROM upsert`
 	for _, r := range rows {
 		raw := r.Raw
 		if len(raw) == 0 {
@@ -137,11 +124,11 @@ func (s *Store) TouchClosedPositionsLastSeen(ctx context.Context, walletID strin
 		return 0, nil
 	}
 	const q = `
-		UPDATE wallet_closed_positions
+		UPDATE wallet_closed_position_latest
 		SET observed_at = now(), last_seen_at = now()
 		WHERE wallet_id = $1::uuid
-		  AND condition_id = $2
-		  AND outcome = $3`
+		  AND condition_id = COALESCE($2,'')
+		  AND outcome = COALESCE($3,'')`
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return 0, err
@@ -187,19 +174,10 @@ type HistoricalCloseStats struct {
 	LastObservedAt    *time.Time
 }
 
-// GetHistoricalCloseStats reads the latest snapshot per (condition, outcome)
-// for the wallet and computes ROI/win-rate/avg-stake. Pure SQL; no per-row
-// JSON parsing.
+// GetHistoricalCloseStats reads the compact latest-state table and computes
+// ROI/win-rate/avg-stake. Pure SQL; no per-row JSON parsing.
 func (s *Store) GetHistoricalCloseStats(ctx context.Context, walletID string) (HistoricalCloseStats, error) {
 	const q = `
-		WITH latest AS (
-		    SELECT DISTINCT ON (condition_id, outcome)
-		           wallet_id, condition_id, outcome,
-		           total_bought, realized_pnl, is_closed, closed_at, observed_at
-		    FROM wallet_closed_positions
-		    WHERE wallet_id = $1::uuid
-		    ORDER BY condition_id, outcome, observed_at DESC
-		)
 		SELECT
 		    count(*) FILTER (WHERE is_closed)                                       AS closed_count,
 		    count(*) FILTER (WHERE is_closed AND realized_pnl > 0)                  AS profitable_count,
@@ -210,7 +188,8 @@ func (s *Store) GetHistoricalCloseStats(ctx context.Context, walletID string) (H
 		    COALESCE(min(realized_pnl) FILTER (WHERE is_closed AND realized_pnl<0), 0) AS max_loss,
 		    max(closed_at) FILTER (WHERE is_closed)                                  AS last_closed_at,
 		    max(observed_at)                                                         AS last_observed_at
-		FROM latest`
+		FROM wallet_closed_position_latest
+		WHERE wallet_id = $1::uuid`
 	var st HistoricalCloseStats
 	var lastClosed, lastObserved *time.Time
 	err := s.Pool.QueryRow(ctx, q, walletID).Scan(
@@ -234,14 +213,9 @@ func (s *Store) GetHistoricalCloseStats(ctx context.Context, walletID string) (H
 	// Median computed in a second cheap roundtrip to keep the SQL simple.
 	if st.ClosedCount > 1 {
 		const qm = `
-			WITH latest AS (
-			    SELECT DISTINCT ON (condition_id, outcome) total_bought
-			    FROM wallet_closed_positions
-			    WHERE wallet_id = $1::uuid
-			    ORDER BY condition_id, outcome, observed_at DESC
-			)
 			SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY total_bought)
-			FROM latest WHERE total_bought > 0`
+			FROM wallet_closed_position_latest
+			WHERE wallet_id = $1::uuid AND is_closed AND total_bought > 0`
 		var m float64
 		if err := s.Pool.QueryRow(ctx, qm, walletID).Scan(&m); err == nil {
 			st.MedianClosedStake = m

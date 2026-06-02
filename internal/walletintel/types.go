@@ -137,7 +137,7 @@ type WalletFacts struct {
 	ScoringBasis string
 
 	// Historical closed-position evidence (v4 shark gates, secondary signal).
-	// Sourced exclusively from wallet_closed_positions populated by
+	// Sourced exclusively from wallet_closed_position_latest populated by
 	// HistoryBackfillWorker draining the wallet's /closed-positions stream.
 	// Open positions, current holder size, and in-service lifecycle MUST
 	// NOT be used here — these fields are the only ROI/win-rate input.
@@ -169,10 +169,10 @@ type WalletFacts struct {
 	ProfileCashPnLKnown       bool
 	ProfileCashPnLSampleCount int // positions the sum is based on
 
-	// Position universe breadth (from wallet_closed_positions). Used to detect
+	// Position universe breadth (from wallet_closed_position_latest). Used to detect
 	// the case where a tiny closed-position sample (2–5%) is being scored while
 	// 95%+ of positions remain open and potentially underwater.
-	HistoricalTotalPositionCount int // total rows in wallet_closed_positions
+	HistoricalTotalPositionCount int // total rows in wallet_closed_position_latest
 	HistoricalOpenPositionCount  int // is_closed=false rows
 
 	// Insider-specific context (when scoring a NEW BET)

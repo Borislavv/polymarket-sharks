@@ -259,13 +259,11 @@ type DiscoverySampleStats struct {
 
 // GetDiscoverySampleStats reads the breadth of evidence in pure SQL.
 func (s *Store) GetDiscoverySampleStats(ctx context.Context, walletID string) (DiscoverySampleStats, error) {
-	// count DISTINCT (condition_id, outcome) so the figure is correct both
-	// before and after the latest-state cleanup deduplicates legacy rows.
 	const q = `
 		SELECT
-		    (SELECT count(*) FROM wallet_trades WHERE wallet_id = $1::uuid)                                                                                  AS trades_checked,
-		    (SELECT count(DISTINCT (condition_id, outcome)) FROM wallet_closed_positions WHERE wallet_id = $1::uuid)                                          AS positions_checked,
-		    (SELECT count(DISTINCT (condition_id, outcome)) FROM wallet_closed_positions WHERE wallet_id = $1::uuid AND is_closed = false)                    AS open_unresolved
+		    (SELECT count(*) FROM wallet_trades WHERE wallet_id = $1::uuid)                                      AS trades_checked,
+		    (SELECT count(*) FROM wallet_closed_position_latest WHERE wallet_id = $1::uuid)                       AS positions_checked,
+		    (SELECT count(*) FROM wallet_closed_position_latest WHERE wallet_id = $1::uuid AND is_closed = false) AS open_unresolved
 	`
 	var st DiscoverySampleStats
 	err := s.Pool.QueryRow(ctx, q, walletID).Scan(&st.TradesChecked, &st.PositionsChecked, &st.OpenUnresolvedCount)

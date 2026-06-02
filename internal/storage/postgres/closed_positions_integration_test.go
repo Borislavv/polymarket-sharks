@@ -1,8 +1,9 @@
 //go:build integration
 
 // Run with:
-//   INTEGRATION_DB_URL=postgres://watchtower:watchtower@localhost:5547/watchtower?sslmode=disable \
-//   go test -tags=integration ./internal/storage/postgres/... -run ClosedPositions
+//
+//	INTEGRATION_DB_URL=postgres://watchtower:watchtower@localhost:5547/watchtower?sslmode=disable \
+//	go test -tags=integration ./internal/storage/postgres/... -run ClosedPositions
 package postgres
 
 import (
@@ -57,7 +58,7 @@ func TestIntegration_ClosedPositions_UpsertIsLatestState(t *testing.T) {
 
 	var rowCount int
 	if err := s.Pool.QueryRow(ctx,
-		`SELECT count(*) FROM wallet_closed_positions WHERE wallet_id=$1::uuid`, wid).Scan(&rowCount); err != nil {
+		`SELECT count(*) FROM wallet_closed_position_latest WHERE wallet_id=$1::uuid`, wid).Scan(&rowCount); err != nil {
 		t.Fatal(err)
 	}
 	if rowCount != 1 {
@@ -76,7 +77,7 @@ func TestIntegration_ClosedPositions_FirstSeenAtStableLastSeenAtAdvances(t *test
 	}
 	var firstSeen1, lastSeen1 time.Time
 	if err := s.Pool.QueryRow(ctx,
-		`SELECT first_seen_at, last_seen_at FROM wallet_closed_positions WHERE wallet_id=$1::uuid`, wid).
+		`SELECT first_seen_at, last_seen_at FROM wallet_closed_position_latest WHERE wallet_id=$1::uuid`, wid).
 		Scan(&firstSeen1, &lastSeen1); err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +92,7 @@ func TestIntegration_ClosedPositions_FirstSeenAtStableLastSeenAtAdvances(t *test
 	var firstSeen2, lastSeen2 time.Time
 	var realized float64
 	if err := s.Pool.QueryRow(ctx,
-		`SELECT first_seen_at, last_seen_at, realized_pnl FROM wallet_closed_positions WHERE wallet_id=$1::uuid`, wid).
+		`SELECT first_seen_at, last_seen_at, realized_pnl FROM wallet_closed_position_latest WHERE wallet_id=$1::uuid`, wid).
 		Scan(&firstSeen2, &lastSeen2, &realized); err != nil {
 		t.Fatal(err)
 	}
@@ -126,14 +127,14 @@ func TestIntegration_ClosedPositions_DistinctOutcomesAndWallets(t *testing.T) {
 
 	var n int
 	if err := s.Pool.QueryRow(ctx,
-		`SELECT count(*) FROM wallet_closed_positions WHERE wallet_id=$1::uuid`, wid1).Scan(&n); err != nil {
+		`SELECT count(*) FROM wallet_closed_position_latest WHERE wallet_id=$1::uuid`, wid1).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	if n != 3 {
 		t.Fatalf("wallet1: expected 3 distinct rows, got %d", n)
 	}
 	if err := s.Pool.QueryRow(ctx,
-		`SELECT count(*) FROM wallet_closed_positions WHERE wallet_id=$1::uuid`, wid2).Scan(&n); err != nil {
+		`SELECT count(*) FROM wallet_closed_position_latest WHERE wallet_id=$1::uuid`, wid2).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	if n != 1 {
@@ -160,7 +161,7 @@ func TestIntegration_ClosedPositions_RepeatedRefreshKeepsRowCountStable(t *testi
 	}
 	var n int
 	if err := s.Pool.QueryRow(ctx,
-		`SELECT count(*) FROM wallet_closed_positions WHERE wallet_id=$1::uuid`, wid).Scan(&n); err != nil {
+		`SELECT count(*) FROM wallet_closed_position_latest WHERE wallet_id=$1::uuid`, wid).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	if n != len(batch) {
@@ -191,7 +192,7 @@ func TestIntegration_ClosedPositions_TouchUpdatesTimestampsOnly(t *testing.T) {
 	var realized float64
 	var lastSeen, firstSeen time.Time
 	if err := s.Pool.QueryRow(ctx,
-		`SELECT realized_pnl, first_seen_at, last_seen_at FROM wallet_closed_positions WHERE wallet_id=$1::uuid`, wid).
+		`SELECT realized_pnl, first_seen_at, last_seen_at FROM wallet_closed_position_latest WHERE wallet_id=$1::uuid`, wid).
 		Scan(&realized, &firstSeen, &lastSeen); err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +215,7 @@ func TestIntegration_ClosedPositions_InsertWithEmptyRawDefaultsToObject(t *testi
 	}
 	var rawTxt string
 	if err := s.Pool.QueryRow(ctx,
-		`SELECT raw::text FROM wallet_closed_positions WHERE wallet_id=$1::uuid`, wid).Scan(&rawTxt); err != nil {
+		`SELECT raw::text FROM wallet_closed_position_latest WHERE wallet_id=$1::uuid`, wid).Scan(&rawTxt); err != nil {
 		t.Fatal(err)
 	}
 	if rawTxt != `{}` {

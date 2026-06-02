@@ -196,7 +196,7 @@ func classifyResult(r ScoreResult) string {
 }
 
 // AssembleFacts queries the wallet-summary endpoints and builds WalletFacts.
-// v4 sources historical close stats from wallet_closed_positions (populated
+// v4 sources historical close stats from wallet_closed_position_latest (populated
 // by HistoryBackfillWorker) and a bounded /trades probe for the lifetime
 // count used by insider-like scoring. Open positions are NOT inputs for
 // the shark gates; current holder/lifecycle state is NOT input here either.
